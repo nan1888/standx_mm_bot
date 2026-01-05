@@ -3,3 +3,4 @@ __pycache__
 .cache
 .python-version
 CLAUDE.md
+config.py

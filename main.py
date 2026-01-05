@@ -29,33 +29,22 @@ from rich.text import Text
 
 from exchange_factory import create_exchange, symbol_create
 from dotenv import load_dotenv
+from config import (
+    MODE, EXCHANGE, COIN,
+    SPREAD_BPS, DRIFT_THRESHOLD, MIN_WAIT_SEC, REFRESH_INTERVAL,
+    SIZE_UNIT, LEVERAGE, MAX_SIZE_BTC,
+    MAX_HISTORY, MAX_CONSECUTIVE_ERRORS,
+)
 
 load_dotenv()
 
 STANDX_KEY = SimpleNamespace(
-    wallet_address=os.getenv(f"WALLET_ADDRESS"),
+    wallet_address=os.getenv("WALLET_ADDRESS"),
     chain='bsc',
-    evm_private_key=os.getenv(f"PRIVATE_KEY"), # 생략가능함
+    evm_private_key=os.getenv("PRIVATE_KEY"),
 )
 
 console = Console()
-
-# ==================== 설정 ====================
-
-# 모드 설정: "TEST" = 시뮬레이션, "LIVE" = 실제 주문
-MODE = "LIVE"  # "TEST" or "LIVE"
-
-EXCHANGE = "standx"
-COIN = "BTC"
-SPREAD_BPS = 8.0       # 주문 스프레드 (bps)
-DRIFT_THRESHOLD = 3.0  # 재주문 기준 (bps)
-MIN_WAIT_SEC = 3.0     # 주문 로직 실행 간격
-REFRESH_INTERVAL = 0.1 # 화면 갱신 간격 (초)
-
-# 수량 설정
-SIZE_UNIT = 0.0001           # 최소 주문 단위 (BTC)
-LEVERAGE = 6.0              # 레버리지 배수 (6배 → 양방향 3배씩)
-MAX_SIZE_BTC: Optional[float] = 0.0002  # 수동 최대 수량 제한 (None이면 무제한)
 
 
 # ==================== 시뮬레이션 주문 ====================
@@ -83,6 +72,12 @@ class SimOrderManager:
         self.total_rebalanced = 0
         self.is_live = False
 
+    def _append_history(self, record: Dict[str, Any]) -> None:
+        """히스토리 추가 (메모리 제한)"""
+        self.history.append(record)
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+
     async def place_order(self, side: str, price: float, size: float, reference_price: float) -> SimOrder:
         """주문 생성 (시뮬레이션)"""
         order_id = f"SIM-{uuid.uuid4().hex[:8].upper()}"
@@ -95,7 +90,7 @@ class SimOrderManager:
         )
         self.orders[order_id] = order
         self.total_placed += 1
-        self.history.append({
+        self._append_history({
             "action": "PLACE",
             "order_id": order_id,
             "side": side,
@@ -110,7 +105,7 @@ class SimOrderManager:
             self.orders[order_id].status = "cancelled"
             del self.orders[order_id]
             self.total_cancelled += 1
-            self.history.append({
+            self._append_history({
                 "action": "CANCEL",
                 "order_id": order_id,
                 "reason": reason,
@@ -162,6 +157,12 @@ class LiveOrderManager:
         self.total_rebalanced = 0
         self.is_live = True
 
+    def _append_history(self, record: Dict[str, Any]) -> None:
+        """히스토리 추가 (메모리 제한)"""
+        self.history.append(record)
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+
     async def place_order(self, side: str, price: float, size: float, reference_price: float) -> Optional[SimOrder]:
         """실제 주문 생성"""
         try:
@@ -190,7 +191,7 @@ class LiveOrderManager:
                 )
                 self.orders[cl_ord_id] = order
                 self.total_placed += 1
-                self.history.append({
+                self._append_history({
                     "action": "PLACE",
                     "order_id": cl_ord_id,
                     "side": side,
@@ -616,6 +617,9 @@ async def main():
         last_sync_time = time.time()
         SYNC_INTERVAL = 5.0  # LIVE 모드에서 주문 동기화 간격
 
+        # 연속 에러 추적
+        consecutive_errors = 0
+
         # 메인 루프 (Live context로 flicker-free 업데이트)
         with Live(console=console, refresh_per_second=10, transient=True) as live:
             while True:
@@ -632,10 +636,23 @@ async def main():
                     mark_price_str = await exchange.get_mark_price(symbol)
                     mark_price = float(mark_price_str)
 
+                    # 데이터 검증: mark_price
+                    if mark_price <= 0:
+                        await asyncio.sleep(REFRESH_INTERVAL)
+                        continue
+
                     # orderbook 조회
                     orderbook = await exchange.get_orderbook(symbol)
-                    best_bid = orderbook["bids"][0][0] if orderbook.get("bids") else 0
-                    best_ask = orderbook["asks"][0][0] if orderbook.get("asks") else 0
+                    bids = orderbook.get("bids", [])
+                    asks = orderbook.get("asks", [])
+
+                    # 데이터 검증: orderbook
+                    if not bids or not asks:
+                        await asyncio.sleep(REFRESH_INTERVAL)
+                        continue
+
+                    best_bid = bids[0][0]
+                    best_ask = asks[0][0]
 
                     # collateral 조회 및 주문 수량 계산
                     collateral = await exchange.get_collateral()
@@ -748,13 +765,20 @@ async def main():
                     )
                     live.update(dashboard)
 
+                    # 성공 시 에러 카운터 리셋
+                    consecutive_errors = 0
                     await asyncio.sleep(REFRESH_INTERVAL)
 
                 except Exception as e:
-                    console.print(f"[red][Error] {e}[/red]")
-                    import traceback
-                    traceback.print_exc()
-                    await asyncio.sleep(REFRESH_INTERVAL)
+                    consecutive_errors += 1
+                    backoff = min(consecutive_errors * 0.5, 10.0)  # 최대 10초
+                    console.print(f"[red][Error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}] {e}[/red]")
+
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        console.print("[red]Too many consecutive errors, exiting...[/red]")
+                        break
+
+                    await asyncio.sleep(backoff)
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
@@ -779,4 +803,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass  # 이미 main()에서 처리됨
