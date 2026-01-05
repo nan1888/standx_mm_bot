@@ -22,3 +22,6 @@ MAX_SIZE_BTC = 0.0002   # 최대 주문 수량 (None = 무제한)
 # 안정성 설정
 MAX_HISTORY = 1000              # 주문 히스토리 최대 보관 개수
 MAX_CONSECUTIVE_ERRORS = 10     # 연속 에러 허용 횟수
+
+# 포지션 자동 청산
+AUTO_CLOSE_POSITION = True      # True: 포지션 생기면 자동 청산 후 MM 재개

@@ -34,6 +34,7 @@ from config import (
     SPREAD_BPS, DRIFT_THRESHOLD, MIN_WAIT_SEC, REFRESH_INTERVAL,
     SIZE_UNIT, LEVERAGE, MAX_SIZE_BTC,
     MAX_HISTORY, MAX_CONSECUTIVE_ERRORS,
+    AUTO_CLOSE_POSITION,
 )
 
 load_dotenv()
@@ -662,6 +663,27 @@ async def main():
 
                     # position 조회
                     position = await exchange.get_position(symbol)
+
+                    # ========== 포지션 자동 청산 ==========
+                    if AUTO_CLOSE_POSITION and position and float(position.get("size", 0)) != 0:
+                        # 1. 모든 주문 취소
+                        await order_mgr.cancel_all("Position detected - auto close")
+                        orders_exist_since = None
+
+                        # 2. 포지션 청산
+                        pos_side = position.get("side", "").upper()
+                        pos_size = float(position.get("size", 0))
+                        console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} position...[/yellow]")
+
+                        try:
+                            await exchange.close_position(symbol)
+                            last_action = f"Auto-closed {pos_side} {pos_size:.4f}"
+                            console.print(f"[green]Position closed successfully[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Failed to close position: {e}[/red]")
+
+                        await asyncio.sleep(REFRESH_INTERVAL)
+                        continue
 
                     # 주문 가격 계산
                     buy_price, sell_price = calc_order_prices(mark_price, SPREAD_BPS)
