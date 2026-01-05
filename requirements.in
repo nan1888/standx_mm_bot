@@ -1,0 +1,3 @@
+python-dotenv
+mpdex @ git+https://github.com/NA-DEGEN-GIRL/multi-perp-dex.git@master
+rich
