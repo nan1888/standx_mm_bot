@@ -32,7 +32,7 @@ from exchange_factory import create_exchange, symbol_create
 from dotenv import load_dotenv
 from config import (
     MODE, EXCHANGE, COIN, AUTO_CONFIRM,
-    SPREAD_BPS, DRIFT_THRESHOLD, MIN_WAIT_SEC, REFRESH_INTERVAL,
+    SPREAD_BPS, DRIFT_THRESHOLD, MID_DRIFT_THRESHOLD, MARK_MID_DIFF_LIMIT, MIN_WAIT_SEC, REFRESH_INTERVAL,
     SIZE_UNIT, LEVERAGE, MAX_SIZE_BTC,
     MAX_HISTORY, MAX_CONSECUTIVE_ERRORS,
     AUTO_CLOSE_POSITION,
@@ -583,6 +583,8 @@ def build_dashboard(
     mark_price: float,
     best_bid: float,
     best_ask: float,
+    best_bid_size: float,
+    best_ask_size: float,
     buy_is_maker: bool,
     sell_is_maker: bool,
     drift_bps: float,
@@ -651,10 +653,11 @@ def build_dashboard(
 
     # -- MARKET DATA Section --
     table.add_row(Text("▌ MARKET DATA", style="bold cyan"), "")
-    table.add_row(
-        Text(f"  Mark Price: {format_price(mark_price):>12}"),
-        ""
-    )
+    # Mid price (수량 가중 평균)
+    total_size = best_bid_size + best_ask_size
+    mid_price = (best_bid * best_bid_size + best_ask * best_ask_size) / total_size if total_size > 0 else (best_bid + best_ask) / 2
+    mid_diff_bps = (mid_price - mark_price) / mark_price * 10000 if mark_price > 0 else 0
+    mid_diff_style = "green" if abs(mid_diff_bps) < 3 else ("yellow" if abs(mid_diff_bps) < 6 else "red")
 
     # 스프레드 색상
     if spread_bps < 5:
@@ -663,16 +666,18 @@ def build_dashboard(
         spread_style = "yellow"
     else:
         spread_style = "red"
-
     drift_style = "yellow" if drift_bps > DRIFT_THRESHOLD else "green"
 
-    market_line1 = Text(f"  Best Bid: {format_price(best_bid):>12}  │  Best Ask: {format_price(best_ask):>12}")
-    market_line2 = Text("  OB Spread: ")
-    market_line2.append(f"{spread_bps:>6.2f} bps", style=spread_style)
-    market_line2.append("  │  Drift: ")
-    market_line2.append(f"{drift_bps:>6.2f} bps", style=drift_style)
-    table.add_row(market_line1, "")
-    table.add_row(market_line2, "")
+    # 정렬된 출력 (고정 너비 12자)
+    table.add_row(Text(f"  Mark:   {format_price(mark_price):>12}  │  Mid:    {format_price(mid_price):>12}"), "")
+    table.add_row(Text(f"  Bid:    {format_price(best_bid):>12}  │  Ask:    {format_price(best_ask):>12}"), "")
+    spread_line = Text(f"  Spread: ")
+    spread_line.append(f"{spread_bps:.2f} bps".rjust(12), style=spread_style)
+    spread_line.append(f"  │  Drift:  ")
+    spread_line.append(f"{drift_bps:.2f}".rjust(6), style=drift_style)
+    spread_line.append(" / ")
+    spread_line.append(f"{mid_diff_bps:+.2f} bps", style=mid_diff_style)
+    table.add_row(spread_line, "")
     table.add_row("", "")
 
     # -- SIMULATED ORDERS Section --
@@ -723,6 +728,8 @@ def build_dashboard(
         status_text = Text("✗ NO SIZE - Insufficient collateral", style="red bold")
     elif status == "WAITING":
         status_text = Text("◌ WAITING - Would be TAKER", style="yellow bold")
+    elif status == "MID_WAIT":
+        status_text = Text("◌ MID_WAIT - Mid drift unstable", style="yellow bold")
     elif status == "REBALANCING":
         status_text = Text("⟳ REBALANCING - Cancelling & replacing", style="yellow bold")
     else:
@@ -786,7 +793,7 @@ async def main():
     console.print(f"\n{'='*60}")
     console.print(f"  StandX Market Making Bot")
     console.print(f"  Mode: {mode_str}")
-    console.print(f"  Coin: {COIN}, Spread: {SPREAD_BPS}bps, Drift: {DRIFT_THRESHOLD}bps")
+    console.print(f"  Coin: {COIN}, Spread: {SPREAD_BPS}bps, Drift: {DRIFT_THRESHOLD}+{MID_DRIFT_THRESHOLD}bps, MarkMidLimit: {MARK_MID_DIFF_LIMIT}bps")
     console.print(f"{'='*60}\n")
 
     # LIVE 모드 확인
@@ -882,6 +889,13 @@ async def main():
 
                     best_bid = bids[0][0]
                     best_ask = asks[0][0]
+                    best_bid_size = bids[0][1] if len(bids[0]) > 1 else 0
+                    best_ask_size = asks[0][1] if len(asks[0]) > 1 else 0
+
+                    # mid price drift 계산 (수량 가중 평균)
+                    total_size = best_bid_size + best_ask_size
+                    mid_price = (best_bid * best_bid_size + best_ask * best_ask_size) / total_size if total_size > 0 else (best_bid + best_ask) / 2
+                    mid_diff_bps = abs((mid_price - mark_price) / mark_price * 10000) if mark_price > 0 else 0
 
                     # collateral 조회 및 주문 수량 계산
                     collateral = await exchange.get_collateral()
@@ -971,12 +985,20 @@ async def main():
                         drift_bps = 0.0
 
                     # ========== 2. 상태 결정 ==========
+                    # combined drift = mark drift + mid drift (둘 다 고려)
+                    combined_drift = drift_bps + mid_diff_bps
+                    combined_threshold = DRIFT_THRESHOLD + MID_DRIFT_THRESHOLD
+                    # mark-mid 차이가 너무 크면 주문 대기 (MARK_MID_DIFF_LIMIT > 0일 때만)
+                    mid_unstable = MARK_MID_DIFF_LIMIT > 0 and mid_diff_bps > MARK_MID_DIFF_LIMIT
+
                     if order_size <= 0:
                         status = "NO_SIZE"
                     elif not buy_is_maker or not sell_is_maker:
                         status = "WAITING"
+                    elif mid_unstable and not has_orders:
+                        status = "MID_WAIT"  # mid drift 안정화 대기
                     elif has_orders:
-                        if drift_bps > DRIFT_THRESHOLD:
+                        if combined_drift > combined_threshold:
                             status = "REBALANCING"
                         else:
                             status = "MONITORING"
@@ -1013,16 +1035,16 @@ async def main():
                             orders_exist_since = None
 
                     # 드리프트 체크 - 리밸런스 (MIN_WAIT_SEC 대기 후)
-                    elif has_orders and drift_bps > DRIFT_THRESHOLD and can_modify_orders:
+                    elif has_orders and combined_drift > combined_threshold and can_modify_orders:
                         await order_mgr.cancel_all("Drift exceeded threshold")
                         order_mgr.rebalance()
                         buy_order = await order_mgr.place_order("buy", buy_price, order_size, mark_price)
                         sell_order = await order_mgr.place_order("sell", sell_price, order_size, mark_price)
-                        last_action = f"Rebalanced @ {format_price(mark_price)} (drift: {drift_bps:.1f}bps)"
+                        last_action = f"Rebalanced @ {format_price(mark_price)} (drift: {drift_bps:.1f}+{mid_diff_bps:.1f}bps)"
                         orders_exist_since = current_time  # 새 주문이니 타이머 리셋
 
-                    # 주문이 없고 maker 조건 충족 - 신규 주문 (즉시)
-                    elif not has_orders and buy_is_maker and sell_is_maker:
+                    # 주문이 없고 maker 조건 충족 - 신규 주문 (mid drift 안정 시에만)
+                    elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable:
                         buy_order = await order_mgr.place_order("buy", buy_price, order_size, mark_price)
                         sell_order = await order_mgr.place_order("sell", sell_price, order_size, mark_price)
                         last_action = f"Placed BUY @ {format_price(buy_price)}, SELL @ {format_price(sell_price)}"
@@ -1034,6 +1056,8 @@ async def main():
                         mark_price=mark_price,
                         best_bid=best_bid,
                         best_ask=best_ask,
+                        best_bid_size=best_bid_size,
+                        best_ask_size=best_ask_size,
                         buy_is_maker=buy_is_maker,
                         sell_is_maker=sell_is_maker,
                         drift_bps=drift_bps,

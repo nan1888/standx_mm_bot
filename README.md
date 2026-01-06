@@ -145,7 +145,74 @@ SPREAD_BPS = 8.0    # 현재가에서 0.08% 떨어진 곳에 주문
 
 ---
 
-### 4. LEVERAGE - 레버리지 배수
+### 4. DRIFT_THRESHOLD - 언제 주문을 다시 넣을지
+
+```python
+DRIFT_THRESHOLD = 3.0   # 가격이 0.03% 움직이면 주문 재배치
+```
+
+**쉽게 설명:**
+- 주문을 넣어놨는데 가격이 계속 움직이잖아요?
+- 가격이 너무 멀어지면 주문을 취소하고 새 가격에 다시 넣어야 해요
+- `DRIFT_THRESHOLD = 3`이면 0.03% 움직이면 재배치
+
+**숫자가 크면?** → 주문 재배치 덜 함 → 안정적이지만 가격 따라가기 느림
+**숫자가 작으면?** → 주문 재배치 자주 함 → 가격 잘 따라가지만 수수료 많이 듦
+
+추천: **2~5** 사이로 시작하세요.
+
+---
+
+### 5. MID_DRIFT_THRESHOLD - 주문 취소 조건 강화
+
+```python
+MID_DRIFT_THRESHOLD = 0.0   # 기본값 (사용 안 함)
+MID_DRIFT_THRESHOLD = 1.0   # mid price drift도 고려
+```
+
+**쉽게 설명:**
+- 주문 취소 조건을 더 엄격하게 만들고 싶을 때 사용
+- 기존: mark price만 보고 취소 결정
+- 이 값 > 0: mark price + mid price 둘 다 보고 결정
+
+**취소 조건:**
+```
+(mark drift) + (mid drift) > DRIFT_THRESHOLD + MID_DRIFT_THRESHOLD
+```
+
+**예시:** `DRIFT_THRESHOLD=3`, `MID_DRIFT_THRESHOLD=1`이면
+- mark drift 2bps + mid drift 2.5bps = 4.5bps
+- 4.5 > 4 (3+1) 이므로 → 주문 취소 후 재배치
+
+추천: 처음엔 **0** (사용 안 함), 익숙해지면 조절
+
+---
+
+### 6. MARK_MID_DIFF_LIMIT - 시장 불안정할 때 주문 대기
+
+```python
+MARK_MID_DIFF_LIMIT = 0.0   # 비활성화 (항상 주문)
+MARK_MID_DIFF_LIMIT = 1.0   # mark-mid 차이 1bps 이상이면 대기
+```
+
+**쉽게 설명:**
+- Mark Price: 거래소가 계산한 "공정 가격"
+- Mid Price: 실제 호가창의 중간 가격 (매수/매도 평균)
+- 이 둘의 차이가 크면 시장이 불안정한 거예요
+
+**이 기능이 하는 일:**
+- mark-mid 차이가 크면 "지금은 위험하니까 기다리자"
+- 차이가 줄어들면 그때 주문 넣기
+
+**예시:** `MARK_MID_DIFF_LIMIT = 1.0`이면
+- mark-mid 차이가 1.5bps → 대기 (MID_WAIT 상태)
+- mark-mid 차이가 0.8bps → 주문 진행
+
+추천: **1.0~2.0** (시장 안정될 때만 주문), 또는 **0** (항상 주문)
+
+---
+
+### 7. LEVERAGE - 레버리지 배수
 
 ```python
 LEVERAGE = 6     # 6배 레버리지
@@ -163,7 +230,7 @@ LEVERAGE = 6     # 6배 레버리지
 
 ---
 
-### 5. MAX_SIZE_BTC - 최대 주문 수량 제한
+### 8. MAX_SIZE_BTC - 최대 주문 수량 제한
 
 ```python
 MAX_SIZE_BTC = 0.001    # 한번에 최대 0.001 BTC만 주문
@@ -178,7 +245,7 @@ MAX_SIZE_BTC = None     # 제한 없음 (위험!)
 
 ---
 
-### 6. AUTO_CLOSE_POSITION - 자동 청산
+### 9. AUTO_CLOSE_POSITION - 자동 청산
 
 ```python
 AUTO_CLOSE_POSITION = True    # 포지션 생기면 자동으로 정리
@@ -192,7 +259,7 @@ MM봇은 사고파는 걸 반복하는데, 한쪽이 체결되면 포지션이 �
 
 ---
 
-### 7. CLOSE_METHOD - 청산 방법
+### 10. CLOSE_METHOD - 청산 방법
 
 ```python
 CLOSE_METHOD = "market"      # 시장가로 즉시 청산 (빠름, 약간 손해)
@@ -204,7 +271,7 @@ CLOSE_METHOD = "chase"       # 호가 따라가며 청산
 
 ---
 
-### 8. CLOSE_AGGRESSIVE_BPS - aggressive 모드 세부설정
+### 11. CLOSE_AGGRESSIVE_BPS - aggressive 모드 세부설정
 
 ```python
 CLOSE_AGGRESSIVE_BPS = 5.0   # 현재가에서 0.05% 떨어진 가격에 주문
@@ -215,7 +282,7 @@ CLOSE_AGGRESSIVE_BPS = 0     # 바로 체결되는 가격에 주문 (시장가 �
 
 ---
 
-### 9. 안정성 설정 (건드리지 마세요)
+### 12. 안정성 설정 (건드리지 마세요)
 
 ```python
 MAX_HISTORY = 1000              # 그냥 두세요
