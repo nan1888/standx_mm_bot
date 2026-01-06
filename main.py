@@ -1048,24 +1048,8 @@ async def main():
                         can_modify_orders = True  # 주문이 없으면 바로 새 주문 가능
 
                     # ========== 4. 주문 로직 ==========
-                    # 수량이 0이면 주문 안 함 (즉시)
-                    if order_size <= 0:
-                        if has_orders and can_modify_orders:
-                            count = await order_mgr.cancel_all("Insufficient collateral")
-                            if count > 0:
-                                last_action = f"Cancelled {count} orders (no collateral)"
-                            orders_exist_since = None
-
-                    # Taker 조건 체크 - 즉시 취소 (손실 방지)
-                    elif not buy_is_maker or not sell_is_maker:
-                        if has_orders:
-                            count = await order_mgr.cancel_all("Would become TAKER")
-                            if count > 0:
-                                last_action = f"Cancelled {count} orders (TAKER risk)"
-                            orders_exist_since = None
-
                     # 드리프트 체크 - 리밸런스 (MIN_WAIT_SEC 대기 후)
-                    elif has_orders and effective_drift > DRIFT_THRESHOLD and can_modify_orders:
+                    if has_orders and effective_drift > DRIFT_THRESHOLD and can_modify_orders:
                         order_mgr.rebalance()
                         await order_mgr.cancel_all("Drift exceeded threshold")
                         drift_info = f"{drift_bps:.1f}+{mid_diff_bps:.1f}" if USE_MID_DRIFT else f"{drift_bps:.1f}"
