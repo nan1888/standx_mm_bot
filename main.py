@@ -38,6 +38,7 @@ from config import (
     AUTO_CLOSE_POSITION,
     CLOSE_METHOD, CLOSE_AGGRESSIVE_BPS, CLOSE_WAIT_SEC,
     CLOSE_MIN_SIZE_MARKET, CLOSE_MAX_ITERATIONS,
+    SNAPSHOT_INTERVAL, SNAPSHOT_FILE,
 )
 
 load_dotenv()
@@ -390,9 +391,10 @@ def calc_order_size(
         size = collateral_based_size
 
     # size_unit 단위로 내림 (예: 0.00367 -> 0.003)
-    size = (size // size_unit) * size_unit
-
-    return size
+    # 부동소수점 오차 보정을 위해 round 사용
+    size = round(size / size_unit) * size_unit
+    
+    return round(size, 8)  # 최종 정밀도 보정
 
 
 # ==================== 전략적 포지션 청산 ====================
@@ -843,6 +845,9 @@ async def main():
         # 연속 에러 추적
         consecutive_errors = 0
 
+        # 스냅샷 추적
+        last_snapshot_time = 0.0
+
         # 메인 루프 (Live context로 flicker-free 업데이트)
         with Live(console=console, refresh_per_second=10, transient=True) as live:
             while True:
@@ -1041,6 +1046,26 @@ async def main():
                         mode=MODE
                     )
                     live.update(dashboard)
+
+                    # ========== 6. 스냅샷 저장 ==========
+                    if SNAPSHOT_INTERVAL > 0 and (current_time - last_snapshot_time) >= SNAPSHOT_INTERVAL:
+                        try:
+                            buy_order = order_mgr.get_buy_order()
+                            sell_order = order_mgr.get_sell_order()
+                            with open(SNAPSHOT_FILE, "w", encoding="utf-8") as f:
+                                f.write(f"[{MODE}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                                f.write(f"Mark: {mark_price:,.2f} | Spread: {ob_spread_bps:.1f}bps\n")
+                                f.write(f"Collateral: ${available_collateral:,.2f} | Size: {order_size:.4f} BTC\n")
+                                if buy_order:
+                                    f.write(f"BUY:  {buy_order.price:,.2f} ({buy_order.status})\n")
+                                if sell_order:
+                                    f.write(f"SELL: {sell_order.price:,.2f} ({sell_order.status})\n")
+                                if position and float(position.get("size", 0)) != 0:
+                                    f.write(f"Position: {position.get('side')} {position.get('size')} uPnL: ${position.get('unrealized_pnl', 0):+.2f}\n")
+                                f.write(f"Status: {status}\n")
+                            last_snapshot_time = current_time
+                        except Exception:
+                            pass  # 스냅샷 실패해도 무시
 
                     # 성공 시 에러 카운터 리셋
                     consecutive_errors = 0

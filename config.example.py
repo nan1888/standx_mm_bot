@@ -42,3 +42,7 @@ CLOSE_MIN_SIZE_MARKET = 0.0001  # 이 수량 미만이면 시장가 청산
 
 # 안전 제한
 CLOSE_MAX_ITERATIONS = 100      # 최대 반복 횟수 (초과시 시장가)
+
+# 스냅샷 설정 (tmux 없이 상태 확인용)
+SNAPSHOT_INTERVAL = 60         # 스냅샷 저장 간격 (초), 0이면 비활성화
+SNAPSHOT_FILE = "status.txt"   # 스냅샷 파일명
