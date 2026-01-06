@@ -887,7 +887,8 @@ async def main():
                     collateral = await exchange.get_collateral()
                     available_collateral = float(collateral.get("available_collateral", 0))
                     total_collateral = float(collateral.get("total_collateral", 0))
-                    order_size = calc_order_size(available_collateral, mark_price)
+                    # total 기준으로 계산 (주문이 들어가도 일관된 크기 표시)
+                    order_size = calc_order_size(total_collateral, mark_price)
 
                     # position 조회
                     position = await exchange.get_position(symbol)
