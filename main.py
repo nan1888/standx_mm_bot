@@ -301,21 +301,22 @@ class LiveOrderManager:
 
 # ==================== 유틸 함수 ====================
 
-async def staggered_gather(*coros, delay: float = 0.01):
+async def staggered_gather(*coros, delay: float = 0):
     """
     coroutine들을 약간의 딜레이를 두고 시작하여 병렬 실행.
     WS로 동시에 메시지가 몰리는 것을 방지.
+    delay=0이면 일반 asyncio.gather와 동일.
 
     Args:
         *coros: 실행할 coroutine들
-        delay: 각 coroutine 시작 간격 (초)
+        delay: 각 coroutine 시작 간격 (초), 0이면 스킵
 
     Returns:
         모든 coroutine의 결과 리스트
     """
     tasks = []
     for i, coro in enumerate(coros):
-        if i > 0:
+        if delay > 0 and i > 0:
             await asyncio.sleep(delay)
         tasks.append(asyncio.create_task(coro))
     return await asyncio.gather(*tasks)
