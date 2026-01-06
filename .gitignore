@@ -4,3 +4,4 @@ __pycache__
 .python-version
 CLAUDE.md
 config.py
+position_log.txt

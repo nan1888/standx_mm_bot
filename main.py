@@ -15,6 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import asyncio
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, List
 from types import SimpleNamespace
@@ -39,6 +40,16 @@ from config import (
 
 load_dotenv()
 
+# ==================== 로깅 설정 ====================
+LOG_FILE = "position_log.txt"
+
+# 파일 로거 설정
+file_logger = logging.getLogger("position")
+file_logger.setLevel(logging.INFO)
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+file_logger.addHandler(file_handler)
+
 STANDX_KEY = SimpleNamespace(
     wallet_address=os.getenv("WALLET_ADDRESS"),
     chain='bsc',
@@ -47,6 +58,13 @@ STANDX_KEY = SimpleNamespace(
 )
 
 console = Console()
+
+# ==================== 포지션 통계 ====================
+position_stats = {
+    "total_closes": 0,       # 총 청산 횟수
+    "total_volume": 0.0,     # 총 청산 BTC 수량
+    "total_pnl": 0.0,        # 총 실현 손익 (USD)
+}
 
 
 # ==================== 시뮬레이션 주문 ====================
@@ -390,6 +408,7 @@ def build_dashboard(
     available_collateral: float,
     order_size: float,
     position: Optional[Dict[str, Any]],
+    pos_stats: Dict[str, Any],
     last_action: str = "",
     mode: str = "TEST"
 ) -> Panel:
@@ -534,10 +553,14 @@ def build_dashboard(
     table.add_row("", "")
 
     # -- STATS Section --
+    pnl_style = "green" if pos_stats['total_pnl'] >= 0 else "red"
     stats_text = Text(
-        f"Placed: {order_mgr.total_placed}  Cancelled: {order_mgr.total_cancelled}  Rebalanced: {order_mgr.total_rebalanced}",
+        f"Placed: {order_mgr.total_placed}  Cancelled: {order_mgr.total_cancelled}  Rebalanced: {order_mgr.total_rebalanced}  "
+        f"Closes: {pos_stats['total_closes']} ({pos_stats['total_volume']:.4f} BTC, ",
         style="dim"
     )
+    stats_text.append(f"${pos_stats['total_pnl']:+.2f}", style=pnl_style)
+    stats_text.append(")", style="dim")
     table.add_row(stats_text, "")
 
     # Panel로 감싸기
@@ -670,16 +693,36 @@ async def main():
                         await order_mgr.cancel_all("Position detected - auto close")
                         orders_exist_since = None
 
-                        # 2. 포지션 청산
+                        # 2. 포지션 정보 수집
                         pos_side = position.get("side", "").upper()
-                        pos_size = float(position.get("size", 0))
-                        console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} position...[/yellow]")
+                        pos_size = abs(float(position.get("size", 0)))
+                        pos_entry = float(position.get("entry_price", 0))
+                        pos_pnl = float(position.get("unrealized_pnl", 0))
 
+                        # 로그: 포지션 감지
+                        file_logger.info(f"POSITION DETECTED | {pos_side} {pos_size:.6f} BTC @ {pos_entry:.2f} | uPnL: ${pos_pnl:+.2f}")
+                        console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} position (uPnL: ${pos_pnl:+.2f})...[/yellow]")
+
+                        # 3. 포지션 청산
                         try:
                             await exchange.close_position(symbol)
-                            last_action = f"Auto-closed {pos_side} {pos_size:.4f}"
-                            console.print(f"[green]Position closed successfully[/green]")
+
+                            # 통계 업데이트
+                            position_stats["total_closes"] += 1
+                            position_stats["total_volume"] += pos_size
+                            position_stats["total_pnl"] += pos_pnl
+
+                            # 로그: 포지션 청산 완료
+                            file_logger.info(
+                                f"POSITION CLOSED  | {pos_side} {pos_size:.6f} BTC | PnL: ${pos_pnl:+.2f} | "
+                                f"Total: {position_stats['total_closes']} closes, "
+                                f"{position_stats['total_volume']:.6f} BTC, ${position_stats['total_pnl']:+.2f}"
+                            )
+
+                            last_action = f"Auto-closed {pos_side} {pos_size:.4f} (${pos_pnl:+.2f})"
+                            console.print(f"[green]Position closed successfully (PnL: ${pos_pnl:+.2f})[/green]")
                         except Exception as e:
+                            file_logger.info(f"POSITION CLOSE FAILED | {pos_side} {pos_size:.6f} BTC | uPnL: ${pos_pnl:+.2f} | Error: {e}")
                             console.print(f"[red]Failed to close position: {e}[/red]")
 
                         await asyncio.sleep(REFRESH_INTERVAL)
@@ -783,6 +826,7 @@ async def main():
                         available_collateral=available_collateral,
                         order_size=order_size,
                         position=position,
+                        pos_stats=position_stats,
                         last_action=last_action,
                         mode=MODE
                     )
@@ -819,6 +863,10 @@ async def main():
         console.print(f"  Total Orders Placed:    {order_mgr.total_placed}")
         console.print(f"  Total Orders Cancelled: {order_mgr.total_cancelled}")
         console.print(f"  Total Rebalances:       {order_mgr.total_rebalanced}")
+        console.print(f"  Position Closes:        {position_stats['total_closes']}")
+        console.print(f"  Total Volume Closed:    {position_stats['total_volume']:.6f} BTC")
+        pnl_color = "green" if position_stats['total_pnl'] >= 0 else "red"
+        console.print(f"  Total Realized PnL:     [{pnl_color}]${position_stats['total_pnl']:+.2f}[/{pnl_color}]")
 
         console.print("Closing exchange connection...")
         await exchange.close()

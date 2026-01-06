@@ -139,6 +139,23 @@ python main.py
 >
 > `False`로 설정하면 포지션을 유지한 채 MM을 계속합니다.
 
+### 포지션 로그 기록
+
+포지션이 감지되고 청산될 때마다 `position_log.txt` 파일에 자동으로 기록됩니다.
+
+**로그 예시:**
+```
+2026-01-06 14:30:15 | POSITION DETECTED | LONG 0.000100 BTC @ 97500.00 | uPnL: $+1.25
+2026-01-06 14:30:16 | POSITION CLOSED  | LONG 0.000100 BTC | PnL: $+1.25 | Total: 1 closes, 0.000100 BTC, $+1.25
+```
+
+**대시보드 통계:**
+```
+Placed: 125  Cancelled: 120  Rebalanced: 45  Closes: 3 (0.0003 BTC, $+5.50)
+```
+
+> **주의**: 기록되는 PnL은 청산 직전의 미실현 손익(unrealized PnL)입니다. 시장가로 청산하기 때문에 슬리피지가 발생할 수 있어 **실제 실현 손익과 약간 차이**가 날 수 있습니다.
+
 ---
 
 ## 설정 예시
