@@ -1056,13 +1056,10 @@ async def main():
                     elif has_orders and effective_drift > DRIFT_THRESHOLD and can_modify_orders:
                         order_mgr.rebalance()
                         await order_mgr.cancel_all("Drift exceeded threshold")
-                        buy_order, sell_order = await staggered_gather(
-                            order_mgr.place_order("buy", buy_price, order_size, mark_price),
-                            order_mgr.place_order("sell", sell_price, order_size, mark_price),
-                        )
                         drift_info = f"{drift_bps:.1f}+{mid_diff_bps:.1f}" if USE_MID_DRIFT else f"{drift_bps:.1f}"
-                        last_action = f"Rebalanced @ {format_price(mark_price)} (drift: {drift_info}bps)"
-                        orders_exist_since = current_time  # 새 주문이니 타이머 리셋
+                        last_action = f"Cancelled for rebalance (drift: {drift_info}bps)"
+                        orders_exist_since = None
+                        continue  # 다음 iteration에서 fresh price로 신규 주문
 
                     # 주문이 없고 maker 조건 충족 - 신규 주문 (mid drift 안정 시에만)
                     elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable:
