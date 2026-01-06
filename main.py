@@ -14,6 +14,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import asyncio
+import time
 import uuid
 import logging
 from datetime import datetime
@@ -232,11 +233,21 @@ class LiveOrderManager:
         return None
 
     async def cancel_all(self, reason: str = "") -> int:
-        """모든 주문 취소"""
+        """캐시된 주문들만 취소 (새로 생성되는 주문과 충돌 없음)"""
         try:
-            await self.exchange.cancel_orders(symbol=self.symbol)
-            count = len(self._cached_orders)
+            # 캐시된 주문들을 명시적으로 전달하여 해당 주문만 취소
+            orders_to_cancel = list(self._cached_orders.values())
+            if orders_to_cancel:
+                await self.exchange.cancel_orders(symbol=self.symbol, open_orders=orders_to_cancel)
+            count = len(orders_to_cancel)
             self.total_cancelled += count
+            if count > 0:
+                self._append_history({
+                    "action": "CANCEL_ALL",
+                    "count": count,
+                    "reason": reason,
+                    "time": datetime.now()
+                })
             self.reference_prices.clear()
             self._cached_orders.clear()
             return count
@@ -417,8 +428,6 @@ async def close_position_strategic(
     Returns:
         (success, elapsed_time, iterations, log_message)
     """
-    import time
-
     pos_side = position.get("side", "").lower()
     remaining_size = abs(float(position.get("size", 0)))
     close_side = "sell" if pos_side in ["long", "buy"] else "buy"
@@ -838,7 +847,6 @@ async def main():
             await order_mgr.fetch_orders()
 
         # 주문 존재 시점 추적
-        import time
         orders_exist_since: Optional[float] = None  # 주문이 존재하기 시작한 시점
         countdown = float(MIN_WAIT_SEC)
 
@@ -900,7 +908,7 @@ async def main():
 
                     # ========== 포지션 자동 청산 ==========
                     if AUTO_CLOSE_POSITION and position and float(position.get("size", 0)) != 0:
-                        # 1. 모든 주문 취소 (sync는 iteration 시작시 이미 완료)
+                        # 1. 모든 주문 취소
                         await order_mgr.cancel_all("Position detected - auto close")
                         orders_exist_since = None
 
@@ -916,7 +924,7 @@ async def main():
 
                         # 3. 전략적 포지션 청산
                         try:
-                            success, elapsed_time, iterations, close_log = await close_position_strategic(
+                            _success, elapsed_time, iterations, close_log = await close_position_strategic(
                                 exchange=exchange,
                                 symbol=symbol,
                                 position=position,
@@ -1026,18 +1034,23 @@ async def main():
 
                     # 드리프트 체크 - 리밸런스 (MIN_WAIT_SEC 대기 후)
                     elif has_orders and effective_drift > DRIFT_THRESHOLD and can_modify_orders:
-                        await order_mgr.cancel_all("Drift exceeded threshold")
                         order_mgr.rebalance()
-                        buy_order = await order_mgr.place_order("buy", buy_price, order_size, mark_price)
-                        sell_order = await order_mgr.place_order("sell", sell_price, order_size, mark_price)
+                        # cancel_all은 캐시된 주문만 취소하므로 새 주문과 병렬 실행 가능
+                        _cancelled, buy_order, sell_order = await asyncio.gather(
+                            order_mgr.cancel_all("Drift exceeded threshold"),
+                            order_mgr.place_order("buy", buy_price, order_size, mark_price),
+                            order_mgr.place_order("sell", sell_price, order_size, mark_price),
+                        )
                         drift_info = f"{drift_bps:.1f}+{mid_diff_bps:.1f}" if USE_MID_DRIFT else f"{drift_bps:.1f}"
                         last_action = f"Rebalanced @ {format_price(mark_price)} (drift: {drift_info}bps)"
                         orders_exist_since = current_time  # 새 주문이니 타이머 리셋
 
                     # 주문이 없고 maker 조건 충족 - 신규 주문 (mid drift 안정 시에만)
                     elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable:
-                        buy_order = await order_mgr.place_order("buy", buy_price, order_size, mark_price)
-                        sell_order = await order_mgr.place_order("sell", sell_price, order_size, mark_price)
+                        buy_order, sell_order = await asyncio.gather(
+                            order_mgr.place_order("buy", buy_price, order_size, mark_price),
+                            order_mgr.place_order("sell", sell_price, order_size, mark_price),
+                        )
                         last_action = f"Placed BUY @ {format_price(buy_price)}, SELL @ {format_price(sell_price)}"
                         orders_exist_since = current_time  # 타이머 시작
 
