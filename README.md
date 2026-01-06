@@ -191,6 +191,64 @@ LIVE 모드에서는 자동으로 모든 주문을 취소한 후 종료합니다
 
 ---
 
+## 원격 서버에서 실행 (AWS, GCP 등)
+
+SSH 접속이 끊겨도 봇이 계속 돌아가게 하려면 **tmux**를 사용하세요.
+
+### tmux 설치
+
+```bash
+# Ubuntu/Debian
+sudo apt install tmux
+
+# Amazon Linux
+sudo yum install tmux
+```
+
+### 사용법
+
+**1. 새 세션 시작**
+```bash
+tmux new -s mm
+```
+> `mm`은 세션 이름입니다. 원하는 이름으로 바꿔도 됩니다.
+
+**2. 봇 실행**
+```bash
+python main.py
+```
+
+**3. 세션에서 분리 (봇은 계속 실행됨)**
+```
+Ctrl+B 누른 후 D
+```
+> SSH 끊겨도 봇은 계속 돌아갑니다!
+
+**4. 나중에 세션 다시 연결**
+```bash
+tmux attach -t mm
+```
+> 대시보드 화면이 그대로 보입니다.
+
+**5. 봇 종료하고 싶을 때**
+```bash
+tmux attach -t mm    # 세션 연결
+Ctrl+C               # 봇 종료
+exit                 # 세션 종료
+```
+
+### tmux 명령어 요약
+
+| 명령어 | 설명 |
+|--------|------|
+| `tmux new -s 이름` | 새 세션 시작 |
+| `tmux attach -t 이름` | 세션 다시 연결 |
+| `tmux ls` | 실행 중인 세션 목록 |
+| `tmux kill-session -t 이름` | 세션 강제 종료 |
+| `Ctrl+B` → `D` | 세션에서 분리 (detach) |
+
+---
+
 ## 문제 해결
 
 ### "ModuleNotFoundError" 에러가 나요
