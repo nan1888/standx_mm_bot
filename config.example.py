@@ -10,7 +10,7 @@ COIN = "BTC"
 AUTO_CONFIRM = False    # True: LIVE 모드 YES 확인 생략
 
 # 주문 설정
-SPREAD_BPS = 7.5        # 주문 스프레드 (bps)
+SPREAD_BPS = 6.7        # 주문 스프레드 (bps)
 DRIFT_THRESHOLD = 2.5   # 재주문 트리거 (bps)
 USE_MID_DRIFT = False   # True: mark drift + mid drift 합산, False: mark drift만 고려
 MARK_MID_DIFF_LIMIT = 1.0  # mark-mid 차이가 이 값(bps) 초과시 주문 대기 (0이면 비활성화)
