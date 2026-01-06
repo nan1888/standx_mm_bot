@@ -7,6 +7,7 @@ StandX MM Bot 설정 파일
 MODE = "TEST"           # "TEST" = 시뮬레이션, "LIVE" = 실제 주문
 EXCHANGE = "standx"
 COIN = "BTC"
+AUTO_CONFIRM = False    # True: LIVE 모드 YES 확인 생략
 
 # 주문 설정
 SPREAD_BPS = 8.0        # 주문 스프레드 (bps)
@@ -25,3 +26,19 @@ MAX_CONSECUTIVE_ERRORS = 10     # 연속 에러 허용 횟수
 
 # 포지션 자동 청산
 AUTO_CLOSE_POSITION = True      # True: 포지션 생기면 자동 청산 후 MM 재개
+
+# 청산 방식: "market" | "aggressive" | "chase"
+# - market: 즉시 시장가 청산 (기존 동작)
+# - aggressive: mark price 기준 지정가 (빠른 체결 유도)
+# - chase: 호가창 최우선가 지정가
+CLOSE_METHOD = "market"
+
+# aggressive 모드 설정
+CLOSE_AGGRESSIVE_BPS = 5.0      # mark price에서 떨어진 bps, 0이면 즉시체결 best 호가에 주문
+
+# aggressive/chase 공통 설정
+CLOSE_WAIT_SEC = 3.0            # 주문 후 대기 시간 (초)
+CLOSE_MIN_SIZE_MARKET = 0.0001  # 이 수량 미만이면 시장가 청산
+
+# 안전 제한
+CLOSE_MAX_ITERATIONS = 100      # 최대 반복 횟수 (초과시 시장가)

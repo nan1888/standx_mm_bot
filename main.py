@@ -31,11 +31,13 @@ from rich.text import Text
 from exchange_factory import create_exchange, symbol_create
 from dotenv import load_dotenv
 from config import (
-    MODE, EXCHANGE, COIN,
+    MODE, EXCHANGE, COIN, AUTO_CONFIRM,
     SPREAD_BPS, DRIFT_THRESHOLD, MIN_WAIT_SEC, REFRESH_INTERVAL,
     SIZE_UNIT, LEVERAGE, MAX_SIZE_BTC,
     MAX_HISTORY, MAX_CONSECUTIVE_ERRORS,
     AUTO_CLOSE_POSITION,
+    CLOSE_METHOD, CLOSE_AGGRESSIVE_BPS, CLOSE_WAIT_SEC,
+    CLOSE_MIN_SIZE_MARKET, CLOSE_MAX_ITERATIONS,
 )
 
 load_dotenv()
@@ -64,6 +66,8 @@ position_stats = {
     "total_closes": 0,       # 총 청산 횟수
     "total_volume": 0.0,     # 총 청산 BTC 수량
     "total_pnl": 0.0,        # 총 실현 손익 (USD)
+    "last_close_time": 0.0,  # 마지막 청산 소요 시간 (초)
+    "total_close_time": 0.0, # 총 청산 소요 시간 (초)
 }
 
 
@@ -391,6 +395,185 @@ def calc_order_size(
     return size
 
 
+# ==================== 전략적 포지션 청산 ====================
+
+async def close_position_strategic(
+    exchange,
+    symbol: str,
+    position: Dict[str, Any],
+    method: str,
+    aggressive_bps: float,
+    wait_sec: float,
+    min_size_market: float,
+    max_iterations: int,
+) -> Tuple[bool, float, int, str]:
+    """
+    전략적 포지션 청산.
+
+    Args:
+        exchange: Exchange wrapper 인스턴스
+        symbol: 거래 심볼
+        position: 포지션 정보 {'size', 'side'}
+        method: "market", "aggressive", "chase"
+        aggressive_bps: aggressive 모드 BPS
+        wait_sec: 대기 시간 (초)
+        min_size_market: 시장가 전환 최소 수량
+        max_iterations: 최대 반복 횟수
+
+    Returns:
+        (success, elapsed_time, iterations, log_message)
+    """
+    import time
+
+    pos_side = position.get("side", "").lower()
+    remaining_size = abs(float(position.get("size", 0)))
+    close_side = "sell" if pos_side in ["long", "buy"] else "buy"
+
+    start_time = time.time()
+    iterations = 0
+
+    # Market close - 즉시 시장가
+    if method == "market":
+        await exchange.close_position(symbol, position)
+        elapsed = time.time() - start_time
+        return (True, elapsed, 1, f"MARKET 청산 ({elapsed:.2f}s)")
+
+    # Limit order close loop (aggressive or chase)
+    while remaining_size > 0:
+        iterations += 1
+
+        # 최대 반복 횟수 초과 시 시장가로 강제 청산
+        if iterations > max_iterations:
+            await exchange.create_order(
+                symbol=symbol,
+                side=close_side,
+                amount=remaining_size,
+                order_type="market",
+                is_reduce_only=True,
+            )
+            elapsed = time.time() - start_time
+            return (True, elapsed, iterations, f"{method.upper()} 청산 - max iterations 초과, 시장가 전환 ({elapsed:.1f}s)")
+
+        # 잔여 수량이 너무 작으면 시장가로 청산
+        if remaining_size < min_size_market:
+            await exchange.create_order(
+                symbol=symbol,
+                side=close_side,
+                amount=remaining_size,
+                order_type="market",
+                is_reduce_only=True,
+            )
+            elapsed = time.time() - start_time
+            return (True, elapsed, iterations, f"{method.upper()} 청산 - dust 시장가 전환 ({elapsed:.1f}s, {iterations} iter)")
+
+        # 방식에 따라 지정가 계산
+        limit_price = None
+
+        if method == "aggressive":
+            if aggressive_bps == 0:
+                # BPS가 0이면 즉시 체결되는 호가에 지정가 (시장가처럼 동작)
+                orderbook = await exchange.get_orderbook(symbol)
+                bids = orderbook.get("bids", [])
+                asks = orderbook.get("asks", [])
+                if close_side == "sell":
+                    # LONG 청산: best_bid에 매도 → 즉시 체결
+                    limit_price = bids[0][0] if bids else None
+                else:
+                    # SHORT 청산: best_ask에 매수 → 즉시 체결
+                    limit_price = asks[0][0] if asks else None
+
+                # 오더북 없으면 mark_price로 fallback (시장가 회피)
+                if limit_price is None:
+                    limit_price = float(await exchange.get_mark_price(symbol))
+            else:
+                mark_price = float(await exchange.get_mark_price(symbol))
+                if close_side == "sell":
+                    # LONG 청산: 낮은 가격에 매도 (빠른 체결)
+                    limit_price = mark_price * (1 - aggressive_bps / 10000)
+                else:
+                    # SHORT 청산: 높은 가격에 매수 (빠른 체결)
+                    limit_price = mark_price * (1 + aggressive_bps / 10000)
+
+        elif method == "chase":
+            orderbook = await exchange.get_orderbook(symbol)
+            bids = orderbook.get("bids", [])
+            asks = orderbook.get("asks", [])
+
+            if close_side == "sell":
+                # LONG 청산: best_ask에 매도
+                limit_price = asks[0][0] if asks else None
+            else:
+                # SHORT 청산: best_bid에 매수
+                limit_price = bids[0][0] if bids else None
+
+            # 오더북 데이터 없으면 시장가 fallback
+            if limit_price is None:
+                await exchange.create_order(
+                    symbol=symbol,
+                    side=close_side,
+                    amount=remaining_size,
+                    order_type="market",
+                    is_reduce_only=True,
+                )
+                elapsed = time.time() - start_time
+                return (True, elapsed, iterations, f"CHASE 청산 - 오더북 없음, 시장가 전환 ({elapsed:.1f}s)")
+
+        # 지정가 주문 생성
+        cl_ord_id = f"CLOSE-{uuid.uuid4().hex[:8].upper()}"
+        console.print(f"[dim]Close order: {close_side.upper()} {remaining_size:.6f} @ {limit_price:,.2f}[/dim]")
+        try:
+            await exchange.create_order(
+                symbol=symbol,
+                side=close_side,
+                amount=remaining_size,
+                price=limit_price,
+                order_type="limit",
+                is_reduce_only=True,
+                client_order_id=cl_ord_id,
+            )
+        except Exception as e:
+            # 주문 실패 시 다음 iteration에서 재시도
+            console.print(f"[yellow]Close order failed: {e}, retrying...[/yellow]")
+            await asyncio.sleep(1.0)
+            continue
+
+        # 폴링으로 체결 확인 (0.5초 간격, wait_sec까지)
+        poll_interval = 0.01
+        poll_start = time.time()
+        filled = False
+
+        while (time.time() - poll_start) < wait_sec:
+            await asyncio.sleep(poll_interval)
+
+            # 포지션 확인
+            new_position = await exchange.get_position(symbol)
+            if new_position is None or float(new_position.get("size", 0)) == 0:
+                # 완전 청산 완료
+                elapsed = time.time() - start_time
+                return (True, elapsed, iterations, f"{method.upper()} 청산 완료 ({elapsed:.1f}s, {iterations} iter)")
+
+            # 잔여 수량 확인
+            new_remaining = abs(float(new_position.get("size", 0)))
+            if new_remaining < remaining_size:
+                # 부분 체결 발생
+                console.print(f"[dim]Partial fill: {remaining_size:.6f} -> {new_remaining:.6f}[/dim]")
+                remaining_size = new_remaining
+                filled = True
+
+        # 대기 시간 만료 후에도 미체결이면 취소 후 재시도
+        if not filled:
+            remaining_size = abs(float((await exchange.get_position(symbol) or {}).get("size", 0)))
+
+        # 미체결 주문 취소
+        try:
+            await exchange.cancel_order(client_order_id=cl_ord_id)
+        except Exception:
+            pass  # 이미 체결되었거나 취소됨
+
+    elapsed = time.time() - start_time
+    return (True, elapsed, iterations, f"{method.upper()} 청산 완료 ({elapsed:.1f}s, {iterations} iter)")
+
+
 # ==================== 대시보드 출력 (Rich) ====================
 
 def build_dashboard(
@@ -554,14 +737,26 @@ def build_dashboard(
 
     # -- STATS Section --
     pnl_style = "green" if pos_stats['total_pnl'] >= 0 else "red"
-    stats_text = Text(
-        f"Placed: {order_mgr.total_placed}  Cancelled: {order_mgr.total_cancelled}  Rebalanced: {order_mgr.total_rebalanced}  "
-        f"Closes: {pos_stats['total_closes']} ({pos_stats['total_volume']:.4f} BTC, ",
+
+    # 첫 줄: 주문 통계
+    stats_line1 = Text(
+        f"Placed: {order_mgr.total_placed}  Cancelled: {order_mgr.total_cancelled}  Rebalanced: {order_mgr.total_rebalanced}",
         style="dim"
     )
-    stats_text.append(f"${pos_stats['total_pnl']:+.2f}", style=pnl_style)
-    stats_text.append(")", style="dim")
-    table.add_row(stats_text, "")
+    table.add_row(stats_line1, "")
+
+    # 둘째 줄: 청산 통계
+    stats_line2 = Text(f"Closes: {pos_stats['total_closes']} (", style="dim")
+    stats_line2.append(f"{pos_stats['total_volume']:.4f} BTC", style="dim")
+    stats_line2.append(", ", style="dim")
+    stats_line2.append(f"${pos_stats['total_pnl']:+.2f}", style=pnl_style)
+    # 청산 시간 표시
+    if pos_stats.get('total_close_time', 0) > 0:
+        stats_line2.append(f", total: {pos_stats['total_close_time']:.1f}s", style="dim")
+    if pos_stats.get('last_close_time', 0) > 0:
+        stats_line2.append(f", last: {pos_stats['last_close_time']:.1f}s", style="dim")
+    stats_line2.append(")", style="dim")
+    table.add_row(stats_line2, "")
 
     # Panel로 감싸기
     if is_live:
@@ -596,10 +791,13 @@ async def main():
         console.print("[bold red]WARNING: LIVE MODE - Real orders will be placed![/bold red]")
         console.print(f"  Max Size: {MAX_SIZE_BTC} {COIN}")
         console.print(f"  Leverage: {LEVERAGE}x")
-        confirm = input("\nType 'YES' to confirm: ")
-        if confirm != "YES":
-            console.print("[yellow]Aborted.[/yellow]")
-            return
+        if AUTO_CONFIRM:
+            console.print("[yellow]AUTO_CONFIRM enabled, skipping confirmation...[/yellow]")
+        else:
+            confirm = input("\nType 'YES' to confirm: ")
+            if confirm != "YES":
+                console.print("[yellow]Aborted.[/yellow]")
+                return
 
     
 
@@ -701,26 +899,38 @@ async def main():
 
                         # 로그: 포지션 감지
                         file_logger.info(f"POSITION DETECTED | {pos_side} {pos_size:.6f} BTC @ {pos_entry:.2f} | uPnL: ${pos_pnl:+.2f}")
-                        console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} position (uPnL: ${pos_pnl:+.2f})...[/yellow]")
+                        console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} via {CLOSE_METHOD} (uPnL: ${pos_pnl:+.2f})...[/yellow]")
 
-                        # 3. 포지션 청산
+                        # 3. 전략적 포지션 청산
                         try:
-                            await exchange.close_position(symbol)
+                            success, elapsed_time, iterations, close_log = await close_position_strategic(
+                                exchange=exchange,
+                                symbol=symbol,
+                                position=position,
+                                method=CLOSE_METHOD,
+                                aggressive_bps=CLOSE_AGGRESSIVE_BPS,
+                                wait_sec=CLOSE_WAIT_SEC,
+                                min_size_market=CLOSE_MIN_SIZE_MARKET,
+                                max_iterations=CLOSE_MAX_ITERATIONS,
+                            )
 
                             # 통계 업데이트
                             position_stats["total_closes"] += 1
                             position_stats["total_volume"] += pos_size
                             position_stats["total_pnl"] += pos_pnl
+                            position_stats["last_close_time"] = elapsed_time
+                            position_stats["total_close_time"] += elapsed_time
 
                             # 로그: 포지션 청산 완료
                             file_logger.info(
                                 f"POSITION CLOSED  | {pos_side} {pos_size:.6f} BTC | PnL: ${pos_pnl:+.2f} | "
+                                f"Method: {CLOSE_METHOD} | Time: {elapsed_time:.2f}s ({iterations} iter) | "
                                 f"Total: {position_stats['total_closes']} closes, "
                                 f"{position_stats['total_volume']:.6f} BTC, ${position_stats['total_pnl']:+.2f}"
                             )
 
-                            last_action = f"Auto-closed {pos_side} {pos_size:.4f} (${pos_pnl:+.2f})"
-                            console.print(f"[green]Position closed successfully (PnL: ${pos_pnl:+.2f})[/green]")
+                            last_action = f"Closed {pos_side} {pos_size:.4f} via {CLOSE_METHOD} ({elapsed_time:.1f}s, ${pos_pnl:+.2f})"
+                            console.print(f"[green]{close_log} (PnL: ${pos_pnl:+.2f})[/green]")
                         except Exception as e:
                             file_logger.info(f"POSITION CLOSE FAILED | {pos_side} {pos_size:.6f} BTC | uPnL: ${pos_pnl:+.2f} | Error: {e}")
                             console.print(f"[red]Failed to close position: {e}[/red]")
@@ -867,6 +1077,9 @@ async def main():
         console.print(f"  Total Volume Closed:    {position_stats['total_volume']:.6f} BTC")
         pnl_color = "green" if position_stats['total_pnl'] >= 0 else "red"
         console.print(f"  Total Realized PnL:     [{pnl_color}]${position_stats['total_pnl']:+.2f}[/{pnl_color}]")
+        if position_stats['total_close_time'] > 0:
+            avg_close_time = position_stats['total_close_time'] / max(1, position_stats['total_closes'])
+            console.print(f"  Total Close Time:       {position_stats['total_close_time']:.1f}s (avg: {avg_close_time:.1f}s)")
 
         console.print("Closing exchange connection...")
         await exchange.close()
