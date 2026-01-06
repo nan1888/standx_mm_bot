@@ -170,17 +170,20 @@ class SimOrderManager:
 
 
 class LiveOrderManager:
-    """실제 주문 관리자 (LIVE 모드)"""
+    """실제 주문 관리자 (LIVE 모드) - 서버 데이터 직접 사용"""
 
     def __init__(self, exchange, symbol: str):
         self.exchange = exchange
         self.symbol = symbol
-        self.orders: Dict[str, SimOrder] = {}  # 로컬 캐시 (reference_price 저장용)
+        # reference_price만 로컬 저장 (drift 계산용, 서버가 모르는 값)
+        self.reference_prices: Dict[str, float] = {}  # side -> reference_price
         self.history: List[Dict[str, Any]] = []
         self.total_placed = 0
         self.total_cancelled = 0
         self.total_rebalanced = 0
         self.is_live = True
+        # 캐시된 서버 주문 (get_orders_from_server 호출 시 갱신)
+        self._cached_orders: Dict[str, Dict] = {}  # side -> server order
 
     def _append_history(self, record: Dict[str, Any]) -> None:
         """히스토리 추가 (메모리 제한)"""
@@ -191,7 +194,6 @@ class LiveOrderManager:
     async def place_order(self, side: str, price: float, size: float, reference_price: float) -> Optional[SimOrder]:
         """실제 주문 생성"""
         try:
-            # client_order_id 생성 (추적용)
             cl_ord_id = f"MM-{uuid.uuid4().hex[:8].upper()}"
 
             result = await self.exchange.create_order(
@@ -203,18 +205,10 @@ class LiveOrderManager:
                 client_order_id=cl_ord_id
             )
 
-            # StandX 응답: {'code': 0, 'message': 'success', 'request_id': '...'}
-            # order_id가 없으므로 cl_ord_id를 사용
             code = result.get("code")
             if code == 0:
-                order = SimOrder(
-                    id=cl_ord_id,  # client_order_id를 ID로 사용
-                    side=side,
-                    price=price,
-                    size=size,
-                    reference_price=reference_price
-                )
-                self.orders[cl_ord_id] = order
+                # reference_price 저장 (drift 계산용)
+                self.reference_prices[side] = reference_price
                 self.total_placed += 1
                 self._append_history({
                     "action": "PLACE",
@@ -223,7 +217,14 @@ class LiveOrderManager:
                     "price": price,
                     "time": datetime.now()
                 })
-                return order
+                # SimOrder 반환 (호환성)
+                return SimOrder(
+                    id=cl_ord_id,
+                    side=side,
+                    price=price,
+                    size=size,
+                    reference_price=reference_price
+                )
             else:
                 console.print(f"[red]Order rejected: {result}[/red]")
         except Exception as e:
@@ -231,65 +232,56 @@ class LiveOrderManager:
         return None
 
     async def cancel_all(self, reason: str = "") -> int:
-        """모든 주문 취소 (symbol 기반 전체 취소)"""
+        """모든 주문 취소"""
         try:
             await self.exchange.cancel_orders(symbol=self.symbol)
-            count = len(self.orders)
+            count = len(self._cached_orders)
             self.total_cancelled += count
-            self.orders.clear()
+            self.reference_prices.clear()
+            self._cached_orders.clear()
             return count
         except Exception as e:
             console.print(f"[red]Cancel all failed: {e}[/red]")
-            self.orders.clear()  # 에러나도 로컬 캐시는 초기화
+            self.reference_prices.clear()
+            self._cached_orders.clear()
             return 0
 
-    async def sync_orders(self) -> None:
-        """
-        실제 오픈 오더와 로컬 캐시 동기화.
-        - 체결된 주문 감지 (로컬에는 있는데 서버에 없으면 제거)
-        - reference_price는 보존 (drift 계산용)
-        """
+    async def fetch_orders(self) -> None:
+        """서버에서 주문 조회하여 캐시 갱신"""
         try:
             real_orders = await self.exchange.get_open_orders(self.symbol)
-
-            # 서버 주문을 side별로 정리
-            server_by_side: Dict[str, Dict] = {}
+            self._cached_orders.clear()
             for ro in real_orders:
                 side = ro.get("side", "").lower()
                 if side in ("buy", "sell"):
-                    server_by_side[side] = ro
-
-            # 로컬 주문과 비교
-            for side in ["buy", "sell"]:
-                local_order = self.get_buy_order() if side == "buy" else self.get_sell_order()
-                server_order = server_by_side.get(side)
-
-                if local_order and not server_order:
-                    # 로컬에 있는데 서버에 없음 = 체결됨
-                    self.orders.pop(local_order.id, None)
-                elif not local_order and server_order:
-                    # 서버에 있는데 로컬에 없음 = 외부에서 생성된 주문 (무시하거나 추가)
-                    pass  # MM이 만든 주문만 추적
-
+                    self._cached_orders[side] = ro
         except Exception as e:
-            console.print(f"[yellow]Sync warning: {e}[/yellow]")
-
-    def get_open_orders(self) -> List[SimOrder]:
-        """열린 주문 목록"""
-        return list(self.orders.values())
+            console.print(f"[yellow]Fetch orders warning: {e}[/yellow]")
 
     def get_buy_order(self) -> Optional[SimOrder]:
-        """BUY 주문 조회"""
-        for order in self.orders.values():
-            if order.side == "buy":
-                return order
+        """BUY 주문 조회 (캐시된 서버 데이터)"""
+        server_order = self._cached_orders.get("buy")
+        if server_order:
+            return SimOrder(
+                id=server_order.get("client_order_id", server_order.get("order_id", "")),
+                side="buy",
+                price=float(server_order.get("price", 0)),
+                size=float(server_order.get("size", server_order.get("amount", 0))),
+                reference_price=self.reference_prices.get("buy", 0)
+            )
         return None
 
     def get_sell_order(self) -> Optional[SimOrder]:
-        """SELL 주문 조회"""
-        for order in self.orders.values():
-            if order.side == "sell":
-                return order
+        """SELL 주문 조회 (캐시된 서버 데이터)"""
+        server_order = self._cached_orders.get("sell")
+        if server_order:
+            return SimOrder(
+                id=server_order.get("client_order_id", server_order.get("order_id", "")),
+                side="sell",
+                price=float(server_order.get("price", 0)),
+                size=float(server_order.get("size", server_order.get("amount", 0))),
+                reference_price=self.reference_prices.get("sell", 0)
+            )
         return None
 
     def rebalance(self) -> None:
@@ -840,10 +832,10 @@ async def main():
         console.print("Waiting for initial data...")
         await asyncio.sleep(2)
 
-        # LIVE 모드: 기존 주문 동기화
+        # LIVE 모드: 기존 주문 조회
         if is_live:
-            console.print("Syncing existing orders...")
-            await order_mgr.sync_orders()
+            console.print("Fetching existing orders...")
+            await order_mgr.fetch_orders()
 
         # 주문 존재 시점 추적
         import time
@@ -862,9 +854,9 @@ async def main():
                 try:
                     current_time = time.time()
 
-                    # ========== 0. LIVE 모드: 매 iteration 주문 동기화 ==========
+                    # ========== 0. LIVE 모드: 서버에서 주문 조회 ==========
                     if is_live:
-                        await order_mgr.sync_orders()
+                        await order_mgr.fetch_orders()
 
                     # ========== 1. 실시간 데이터 fetch ==========
                     # mark_price 조회
