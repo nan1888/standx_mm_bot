@@ -39,7 +39,7 @@ from config import (
     AUTO_CLOSE_POSITION,
     CLOSE_METHOD, CLOSE_AGGRESSIVE_BPS, CLOSE_WAIT_SEC,
     CLOSE_MIN_SIZE_MARKET, CLOSE_MAX_ITERATIONS,
-    SNAPSHOT_INTERVAL, SNAPSHOT_FILE,
+    SNAPSHOT_INTERVAL, SNAPSHOT_FILE, CANCEL_AFTER_DELAY
 )
 
 load_dotenv()
@@ -1071,7 +1071,7 @@ async def main():
                         drift_info = f"{drift_bps:.1f}+{mid_diff_bps:.1f}" if USE_MID_DRIFT else f"{drift_bps:.1f}"
                         last_action = f"Cancelled for rebalance (drift: {drift_info}bps)"
                         orders_exist_since = None
-                        await asyncio.sleep(REFRESH_INTERVAL)
+                        await asyncio.sleep(CANCEL_AFTER_DELAY)
                         continue  # 다음 iteration에서 fresh price로 신규 주문
 
                     # 주문이 없고 maker 조건 충족 - 신규 주문 (mid drift 안정 시에만)

@@ -15,6 +15,7 @@ USE_MID_DRIFT = True    # True: mark drift + mid drift 합산, False: mark drift
 MARK_MID_DIFF_LIMIT = 1.0  # mark-mid 차이가 이 값(bps) 초과시 주문 대기 (0이면 비활성화)
 MIN_WAIT_SEC = 0.1      # 주문 변경 최소 대기 시간 (초)
 REFRESH_INTERVAL = 0.05 # 화면 갱신 간격 (초)
+CANCEL_AFTER_DELAY = 0.1 # 주문 취소후 딜레이 대기
 
 # 수량 설정
 SIZE_UNIT = 0.0001      # 주문 수량 단위 (BTC)
