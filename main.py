@@ -46,10 +46,10 @@ from config import (
 
 load_dotenv()
 
-# ==================== 로깅 설정 ====================
+# ==================== Logging Setup ====================
 LOG_FILE = "position_log.txt"
 
-# 파일 로거 설정
+# File logger setup
 file_logger = logging.getLogger("position")
 file_logger.setLevel(logging.INFO)
 file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
@@ -65,49 +65,49 @@ STANDX_KEY = SimpleNamespace(
 
 console = Console()
 
-# ==================== 포지션 통계 ====================
+# ==================== Position Statistics ====================
 position_stats = {
-    "total_closes": 0,       # 총 청산 횟수
-    "total_volume": 0.0,     # 총 청산 BTC 수량
-    "total_pnl": 0.0,        # 총 실현 손익 (USD)
-    "last_close_time": 0.0,  # 마지막 청산 소요 시간 (초)
-    "total_close_time": 0.0, # 총 청산 소요 시간 (초)
+    "total_closes": 0,       # Total number of closes
+    "total_volume": 0.0,     # Total closed BTC volume
+    "total_pnl": 0.0,        # Total realized PnL (USD)
+    "last_close_time": 0.0,  # Last close elapsed time (sec)
+    "total_close_time": 0.0, # Total close elapsed time (sec)
 }
 
 
-# ==================== 시뮬레이션 주문 ====================
+# ==================== Simulated Orders ====================
 
 @dataclass
 class SimOrder:
-    """시뮬레이션 주문"""
+    """Simulated order"""
     id: str
     side: str  # "buy" or "sell"
     price: float
     size: float
     status: str = "open"  # "open", "filled", "cancelled"
     placed_at: datetime = field(default_factory=datetime.now)
-    reference_price: float = 0.0  # 주문 시점 mark_price
+    reference_price: float = 0.0  # mark_price at order placement
 
 
 class SimOrderManager:
-    """시뮬레이션 주문 관리자"""
+    """Simulation order manager"""
 
     def __init__(self):
         self.orders: Dict[str, SimOrder] = {}
-        self.history: List[Dict[str, Any]] = []  # 주문 히스토리
+        self.history: List[Dict[str, Any]] = []  # Order history
         self.total_placed = 0
         self.total_cancelled = 0
         self.total_rebalanced = 0
         self.is_live = False
 
     def _append_history(self, record: Dict[str, Any]) -> None:
-        """히스토리 추가 (메모리 제한)"""
+        """Append to history (with memory limit)"""
         self.history.append(record)
         if len(self.history) > MAX_HISTORY:
             self.history = self.history[-MAX_HISTORY:]
 
     async def place_order(self, side: str, price: float, size: float, reference_price: float) -> SimOrder:
-        """주문 생성 (시뮬레이션)"""
+        """Create order (simulation)"""
         order_id = f"SIM-{uuid.uuid4().hex[:8].upper()}"
         order = SimOrder(
             id=order_id,
@@ -128,7 +128,7 @@ class SimOrderManager:
         return order
 
     async def cancel_order(self, order_id: str, reason: str = "") -> bool:
-        """주문 취소 (시뮬레이션)"""
+        """Cancel order (simulation)"""
         if order_id in self.orders:
             self.orders[order_id].status = "cancelled"
             del self.orders[order_id]
@@ -143,59 +143,59 @@ class SimOrderManager:
         return False
 
     async def cancel_all(self, reason: str = "") -> int:
-        """모든 주문 취소 (시뮬레이션)"""
+        """Cancel all orders (simulation)"""
         count = len(self.orders)
         for order_id in list(self.orders.keys()):
             await self.cancel_order(order_id, reason)
         return count
 
     def get_open_orders(self) -> List[SimOrder]:
-        """열린 주문 목록"""
+        """Get list of open orders"""
         return list(self.orders.values())
 
     def get_buy_order(self) -> Optional[SimOrder]:
-        """BUY 주문 조회"""
+        """Get BUY order"""
         for order in self.orders.values():
             if order.side == "buy":
                 return order
         return None
 
     def get_sell_order(self) -> Optional[SimOrder]:
-        """SELL 주문 조회"""
+        """Get SELL order"""
         for order in self.orders.values():
             if order.side == "sell":
                 return order
         return None
 
     def rebalance(self) -> None:
-        """리밸런스 카운트 증가"""
+        """Increment rebalance counter"""
         self.total_rebalanced += 1
 
 
 class LiveOrderManager:
-    """실제 주문 관리자 (LIVE 모드) - 서버 데이터 직접 사용"""
+    """Live order manager (LIVE mode) - Uses server data directly"""
 
     def __init__(self, exchange, symbol: str):
         self.exchange = exchange
         self.symbol = symbol
-        # reference_price만 로컬 저장 (drift 계산용, 서버가 모르는 값)
+        # Only store reference_price locally (for drift calculation, server doesn't know this)
         self.reference_prices: Dict[str, float] = {}  # side -> reference_price
         self.history: List[Dict[str, Any]] = []
         self.total_placed = 0
         self.total_cancelled = 0
         self.total_rebalanced = 0
         self.is_live = True
-        # 캐시된 서버 주문 (get_orders_from_server 호출 시 갱신)
+        # Cached server orders (updated on get_orders_from_server call)
         self._cached_orders: Dict[str, Dict] = {}  # side -> server order
 
     def _append_history(self, record: Dict[str, Any]) -> None:
-        """히스토리 추가 (메모리 제한)"""
+        """Append to history (with memory limit)"""
         self.history.append(record)
         if len(self.history) > MAX_HISTORY:
             self.history = self.history[-MAX_HISTORY:]
 
     async def place_order(self, side: str, price: float, size: float, reference_price: float) -> Optional[SimOrder]:
-        """실제 주문 생성"""
+        """Create live order"""
         try:
             cl_ord_id = f"MM-{uuid.uuid4().hex[:8].upper()}"
 
@@ -210,7 +210,7 @@ class LiveOrderManager:
 
             code = result.get("code")
             if code == 0:
-                # reference_price 저장 (drift 계산용)
+                # Store reference_price (for drift calculation)
                 self.reference_prices[side] = reference_price
                 self.total_placed += 1
                 self._append_history({
@@ -220,7 +220,7 @@ class LiveOrderManager:
                     "price": price,
                     "time": datetime.now()
                 })
-                # SimOrder 반환 (호환성)
+                # Return SimOrder (for compatibility)
                 return SimOrder(
                     id=cl_ord_id,
                     side=side,
@@ -235,9 +235,9 @@ class LiveOrderManager:
         return None
 
     async def cancel_all(self, reason: str = "") -> int:
-        """캐시된 주문들만 취소 (새로 생성되는 주문과 충돌 없음)"""
+        """Cancel cached orders only (no conflict with newly created orders)"""
         try:
-            # 캐시된 주문들을 명시적으로 전달하여 해당 주문만 취소
+            # Explicitly pass cached orders to cancel only those orders
             orders_to_cancel = list(self._cached_orders.values())
             if orders_to_cancel:
                 await self.exchange.cancel_orders(symbol=self.symbol, open_orders=orders_to_cancel)
@@ -260,7 +260,7 @@ class LiveOrderManager:
             return 0
 
     async def fetch_orders(self) -> None:
-        """서버에서 주문 조회하여 캐시 갱신"""
+        """Fetch orders from server and update cache"""
         try:
             real_orders = await self.exchange.get_open_orders(self.symbol)
             self._cached_orders.clear()
@@ -272,7 +272,7 @@ class LiveOrderManager:
             console.print(f"[yellow]Fetch orders warning: {e}[/yellow]")
 
     def get_buy_order(self) -> Optional[SimOrder]:
-        """BUY 주문 조회 (캐시된 서버 데이터)"""
+        """Get BUY order (from cached server data)"""
         server_order = self._cached_orders.get("buy")
         if server_order:
             return SimOrder(
@@ -285,7 +285,7 @@ class LiveOrderManager:
         return None
 
     def get_sell_order(self) -> Optional[SimOrder]:
-        """SELL 주문 조회 (캐시된 서버 데이터)"""
+        """Get SELL order (from cached server data)"""
         server_order = self._cached_orders.get("sell")
         if server_order:
             return SimOrder(
@@ -298,23 +298,23 @@ class LiveOrderManager:
         return None
 
     def rebalance(self) -> None:
-        """리밸런스 카운트 증가"""
+        """Increment rebalance counter"""
         self.total_rebalanced += 1
 
-# ==================== 유틸 함수 ====================
+# ==================== Utility Functions ====================
 
 async def staggered_gather(*coros, delay: float = 0):
     """
-    coroutine들을 약간의 딜레이를 두고 시작하여 병렬 실행.
-    WS로 동시에 메시지가 몰리는 것을 방지.
-    delay=0이면 일반 asyncio.gather와 동일.
+    Execute coroutines in parallel with slight delays between starts.
+    Prevents WS message flooding.
+    delay=0 is equivalent to regular asyncio.gather.
 
     Args:
-        *coros: 실행할 coroutine들
-        delay: 각 coroutine 시작 간격 (초), 0이면 스킵
+        *coros: Coroutines to execute
+        delay: Interval between coroutine starts (sec), 0 to skip
 
     Returns:
-        모든 coroutine의 결과 리스트
+        List of results from all coroutines
     """
     tasks = []
     for i, coro in enumerate(coros):
@@ -326,7 +326,7 @@ async def staggered_gather(*coros, delay: float = 0):
 
 def calc_order_prices(mark_price: float, spread_bps: float) -> Tuple[float, float]:
     """
-    mark_price 기준 ±spread_bps 위치의 주문 가격 계산
+    Calculate order prices at ±spread_bps from mark_price
 
     Returns:
         (buy_price, sell_price)
@@ -343,21 +343,21 @@ def check_maker_taker(
     best_ask: float
 ) -> Tuple[bool, bool]:
     """
-    주문이 maker인지 taker인지 판정
+    Determine if order is maker or taker
 
     Returns:
         (buy_is_maker, sell_is_maker)
     """
-    # buy order: maker if price < best_ask (호가창 안에 들어감)
+    # buy order: maker if price < best_ask (inside the orderbook)
     buy_is_maker = buy_price < best_ask
-    # sell order: maker if price > best_bid (호가창 안에 들어감)
+    # sell order: maker if price > best_bid (inside the orderbook)
     sell_is_maker = sell_price > best_bid
     return buy_is_maker, sell_is_maker
 
 
 def calc_drift_bps(current_price: float, reference_price: float) -> float:
     """
-    현재 가격과 기준 가격의 차이를 bps로 계산
+    Calculate the difference between current price and reference price in bps
     """
     if reference_price == 0:
         return 0.0
@@ -366,7 +366,7 @@ def calc_drift_bps(current_price: float, reference_price: float) -> float:
 
 def calc_spread_bps(best_bid: float, best_ask: float) -> float:
     """
-    오더북 스프레드를 bps로 계산
+    Calculate orderbook spread in bps
     """
     if best_bid == 0:
         return 0.0
@@ -375,7 +375,7 @@ def calc_spread_bps(best_bid: float, best_ask: float) -> float:
 
 
 def format_price(price: float, decimals: int = 2) -> str:
-    """가격 포맷팅 (천단위 콤마)"""
+    """Format price with thousand separators"""
     return f"{price:,.{decimals}f}"
 
 
@@ -387,43 +387,43 @@ def calc_order_size(
     max_size: Optional[float] = MAX_SIZE_BTC
 ) -> float:
     """
-    Collateral 기반 주문 수량 계산.
+    Calculate order size based on collateral.
 
     Args:
-        available_collateral: 사용 가능한 담보금 (USD)
-        mark_price: 현재 마크 가격
-        leverage: 레버리지 배수 (6배 → 양방향 3배씩)
-        size_unit: 최소 주문 단위 (기본 0.001 BTC)
-        max_size: 수동 최대 수량 제한 (None이면 무제한)
+        available_collateral: Available collateral (USD)
+        mark_price: Current mark price
+        leverage: Leverage multiplier (6x -> 3x each side for bidirectional)
+        size_unit: Minimum order unit (default 0.001 BTC)
+        max_size: Manual max size limit (None for unlimited)
 
     Returns:
-        주문 수량 (BTC), size_unit 단위로 내림
+        Order size (BTC), floored to size_unit
 
-    예시:
+    Example:
         $100 collateral, BTC=$100k, leverage=6
         -> $100 * 6 / 2 / $100k = 0.003 BTC per side
     """
     if mark_price <= 0 or available_collateral <= 0:
         return 0.0
 
-    # collateral * leverage / 2 (양방향) / mark_price
-    # 예: $100 * 6 / 2 / $100k = 0.003 BTC per side
+    # collateral * leverage / 2 (bidirectional) / mark_price
+    # Example: $100 * 6 / 2 / $100k = 0.003 BTC per side
     collateral_based_size = available_collateral * leverage / 2 / mark_price
 
-    # max_size가 설정되어 있으면 더 작은 값 선택
+    # Use smaller of collateral-based or max_size if set
     if max_size is not None and max_size > 0:
         size = min(collateral_based_size, max_size)
     else:
         size = collateral_based_size
 
-    # size_unit 단위로 내림 (예: 0.00367 -> 0.003)
-    # 부동소수점 오차 보정을 위해 round 사용
+    # Floor to size_unit (e.g., 0.00367 -> 0.003)
+    # Use round to handle floating-point precision
     size = round(size / size_unit) * size_unit
-    
-    return round(size, 8)  # 최종 정밀도 보정
+
+    return round(size, 8)  # Final precision fix
 
 
-# ==================== 전략적 포지션 청산 ====================
+# ==================== Strategic Position Close ====================
 
 async def close_position_strategic(
     exchange,
@@ -436,17 +436,17 @@ async def close_position_strategic(
     max_iterations: int,
 ) -> Tuple[bool, float, int, str]:
     """
-    전략적 포지션 청산.
+    Strategic position close.
 
     Args:
-        exchange: Exchange wrapper 인스턴스
-        symbol: 거래 심볼
-        position: 포지션 정보 {'size', 'side'}
+        exchange: Exchange wrapper instance
+        symbol: Trading symbol
+        position: Position info {'size', 'side'}
         method: "market", "aggressive", "chase"
-        aggressive_bps: aggressive 모드 BPS
-        wait_sec: 대기 시간 (초)
-        min_size_market: 시장가 전환 최소 수량
-        max_iterations: 최대 반복 횟수
+        aggressive_bps: BPS for aggressive mode
+        wait_sec: Wait time (sec)
+        min_size_market: Min size for market fallback
+        max_iterations: Max retry iterations
 
     Returns:
         (success, elapsed_time, iterations, log_message)
@@ -458,18 +458,18 @@ async def close_position_strategic(
     start_time = time.time()
     iterations = 0
 
-    # Market close - 즉시 시장가
+    # Market close - immediate market order
     if method == "market":
         file_logger.info(f"  → CLOSE: MARKET order {close_side.upper()} {remaining_size:.6f}")
         await exchange.close_position(symbol, position)
         elapsed = time.time() - start_time
-        return (True, elapsed, 1, f"MARKET 청산 ({elapsed:.2f}s)")
+        return (True, elapsed, 1, f"MARKET close ({elapsed:.2f}s)")
 
     # Limit order close loop (aggressive or chase)
     while remaining_size > 0:
         iterations += 1
 
-        # 최대 반복 횟수 초과 시 시장가로 강제 청산
+        # Max iterations exceeded - force market close
         if iterations > max_iterations:
             file_logger.info(f"  → CLOSE iter {iterations}: max iterations exceeded, MARKET fallback {remaining_size:.6f}")
             await exchange.create_order(
@@ -480,9 +480,9 @@ async def close_position_strategic(
                 is_reduce_only=True,
             )
             elapsed = time.time() - start_time
-            return (True, elapsed, iterations, f"{method.upper()} 청산 - max iterations 초과, 시장가 전환 ({elapsed:.1f}s)")
+            return (True, elapsed, iterations, f"{method.upper()} close - max iterations exceeded, market fallback ({elapsed:.1f}s)")
 
-        # 잔여 수량이 너무 작으면 시장가로 청산
+        # Remaining size too small - market close
         if remaining_size < min_size_market:
             file_logger.info(f"  → CLOSE iter {iterations}: dust {remaining_size:.6f} < {min_size_market}, MARKET fallback")
             await exchange.create_order(
@@ -493,34 +493,34 @@ async def close_position_strategic(
                 is_reduce_only=True,
             )
             elapsed = time.time() - start_time
-            return (True, elapsed, iterations, f"{method.upper()} 청산 - dust 시장가 전환 ({elapsed:.1f}s, {iterations} iter)")
+            return (True, elapsed, iterations, f"{method.upper()} close - dust market fallback ({elapsed:.1f}s, {iterations} iter)")
 
-        # 방식에 따라 지정가 계산
+        # Calculate limit price based on method
         limit_price = None
 
         if method == "aggressive":
             if aggressive_bps == 0:
-                # BPS가 0이면 즉시 체결되는 호가에 지정가 (시장가처럼 동작)
+                # BPS=0 means use best price for immediate fill (like market order)
                 orderbook = await exchange.get_orderbook(symbol)
                 bids = orderbook.get("bids", [])
                 asks = orderbook.get("asks", [])
                 if close_side == "sell":
-                    # LONG 청산: best_bid에 매도 → 즉시 체결
+                    # LONG close: sell at best_bid -> immediate fill
                     limit_price = bids[0][0] if bids else None
                 else:
-                    # SHORT 청산: best_ask에 매수 → 즉시 체결
+                    # SHORT close: buy at best_ask -> immediate fill
                     limit_price = asks[0][0] if asks else None
 
-                # 오더북 없으면 mark_price로 fallback (시장가 회피)
+                # No orderbook data - fallback to mark_price (avoid market order)
                 if limit_price is None:
                     limit_price = float(await exchange.get_mark_price(symbol))
             else:
                 mark_price = float(await exchange.get_mark_price(symbol))
                 if close_side == "sell":
-                    # LONG 청산: 낮은 가격에 매도 (빠른 체결)
+                    # LONG close: sell at lower price (faster fill)
                     limit_price = mark_price * (1 - aggressive_bps / 10000)
                 else:
-                    # SHORT 청산: 높은 가격에 매수 (빠른 체결)
+                    # SHORT close: buy at higher price (faster fill)
                     limit_price = mark_price * (1 + aggressive_bps / 10000)
 
         elif method == "chase":
@@ -529,13 +529,13 @@ async def close_position_strategic(
             asks = orderbook.get("asks", [])
 
             if close_side == "sell":
-                # LONG 청산: best_ask에 매도
+                # LONG close: sell at best_ask
                 limit_price = asks[0][0] if asks else None
             else:
-                # SHORT 청산: best_bid에 매수
+                # SHORT close: buy at best_bid
                 limit_price = bids[0][0] if bids else None
 
-            # 오더북 데이터 없으면 시장가 fallback
+            # No orderbook data - market fallback
             if limit_price is None:
                 file_logger.info(f"  → CLOSE iter {iterations}: no orderbook, MARKET fallback {remaining_size:.6f}")
                 await exchange.create_order(
@@ -546,9 +546,9 @@ async def close_position_strategic(
                     is_reduce_only=True,
                 )
                 elapsed = time.time() - start_time
-                return (True, elapsed, iterations, f"CHASE 청산 - 오더북 없음, 시장가 전환 ({elapsed:.1f}s)")
+                return (True, elapsed, iterations, f"CHASE close - no orderbook, market fallback ({elapsed:.1f}s)")
 
-        # 지정가 주문 생성
+        # Create limit order
         cl_ord_id = f"CLOSE-{uuid.uuid4().hex[:8].upper()}"
         file_logger.info(f"  → CLOSE iter {iterations}: {close_side.upper()} {remaining_size:.6f} @ {limit_price:,.2f} ({method})")
         console.print(f"[dim]Close order: {close_side.upper()} {remaining_size:.6f} @ {limit_price:,.2f}[/dim]")
@@ -563,13 +563,13 @@ async def close_position_strategic(
                 client_order_id=cl_ord_id,
             )
         except Exception as e:
-            # 주문 실패 시 다음 iteration에서 재시도
+            # Order failed - retry in next iteration
             file_logger.info(f"  → CLOSE iter {iterations}: order failed - {e}, retrying...")
             console.print(f"[yellow]Close order failed: {e}, retrying...[/yellow]")
             await asyncio.sleep(1.0)
             continue
 
-        # 폴링으로 체결 확인 (0.5초 간격, wait_sec까지)
+        # Poll for fill confirmation (0.01s interval, up to wait_sec)
         poll_interval = 0.01
         poll_start = time.time()
         filled = False
@@ -577,37 +577,37 @@ async def close_position_strategic(
         while (time.time() - poll_start) < wait_sec:
             await asyncio.sleep(poll_interval)
 
-            # 포지션 확인
+            # Check position
             new_position = await exchange.get_position(symbol)
             if new_position is None or float(new_position.get("size", 0)) == 0:
-                # 완전 청산 완료
+                # Fully closed
                 elapsed = time.time() - start_time
                 file_logger.info(f"  → CLOSE iter {iterations}: filled completely")
-                return (True, elapsed, iterations, f"{method.upper()} 청산 완료 ({elapsed:.1f}s, {iterations} iter)")
+                return (True, elapsed, iterations, f"{method.upper()} close complete ({elapsed:.1f}s, {iterations} iter)")
 
-            # 잔여 수량 확인
+            # Check remaining size
             new_remaining = abs(float(new_position.get("size", 0)))
             if new_remaining < remaining_size:
-                # 부분 체결 발생
+                # Partial fill occurred
                 file_logger.info(f"  → CLOSE iter {iterations}: partial fill {remaining_size:.6f} -> {new_remaining:.6f}")
                 console.print(f"[dim]Partial fill: {remaining_size:.6f} -> {new_remaining:.6f}[/dim]")
                 remaining_size = new_remaining
                 filled = True
 
-        # 대기 시간 만료 후에도 미체결이면 취소 후 재시도
+        # Timeout with unfilled - cancel and retry
         if not filled:
             remaining_size = abs(float((await exchange.get_position(symbol) or {}).get("size", 0)))
             if remaining_size > 0:
                 file_logger.info(f"  → CLOSE iter {iterations}: timeout, cancelling and retry (remaining: {remaining_size:.6f})")
 
-        # 미체결 주문 취소
+        # Cancel unfilled order
         try:
             await exchange.cancel_order(client_order_id=cl_ord_id)
         except Exception:
-            pass  # 이미 체결되었거나 취소됨
+            pass  # Already filled or cancelled
 
     elapsed = time.time() - start_time
-    return (True, elapsed, iterations, f"{method.upper()} 청산 완료 ({elapsed:.1f}s, {iterations} iter)")
+    return (True, elapsed, iterations, f"{method.upper()} close complete ({elapsed:.1f}s, {iterations} iter)")
 
 
 # ==================== 대시보드 출력 (Rich) ====================
@@ -1103,6 +1103,8 @@ async def main():
                             order_mgr.place_order("buy", buy_price, order_size, mark_price),
                             order_mgr.place_order("sell", sell_price, order_size, mark_price),
                         )
+                        # {'code': 0, 'message': 'success', 'request_id': '....'}
+                        has_orders = buy_order.get('message','fail') == 'success' or sell_order.get('message','fail') == 'success'
                         last_action = f"Placed BUY @ {format_price(buy_price)}, SELL @ {format_price(sell_price)}"
                         orders_exist_since = time.time()  # 타이머 시작
 
