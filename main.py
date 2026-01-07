@@ -614,7 +614,7 @@ async def close_position_strategic(
     return (True, elapsed, iterations, f"{method.upper()} close complete ({elapsed:.1f}s, {iterations} iter)")
 
 
-# ==================== 대시보드 출력 (Rich) ====================
+# ==================== Dashboard Output (Rich) ====================
 
 def build_dashboard(
     symbol: str,
@@ -638,21 +638,21 @@ def build_dashboard(
     last_action: str = "",
     mode: str = "TEST"
 ) -> Panel:
-    """대시보드를 rich Panel로 생성"""
+    """Build dashboard as rich Panel"""
     from rich.table import Table
     from rich.text import Text
 
     now = datetime.now().strftime("%H:%M:%S")
     is_live = mode == "LIVE"
 
-    # 현재 주문 가져오기
+    # Get current orders
     buy_order = order_mgr.get_buy_order()
     sell_order = order_mgr.get_sell_order()
 
-    # 주문 가치 계산 (USD)
+    # Calculate order value (USD)
     order_value = order_size * mark_price
 
-    # ========== 메인 테이블 ==========
+    # ========== Main Table ==========
     table = Table.grid(padding=(0, 1))
     table.add_column(justify="left")
     table.add_column(justify="left")
@@ -672,7 +672,7 @@ def build_dashboard(
         Text(f"  Order Size: {order_size:.4f} {COIN} (${order_value:,.2f}) x{LEVERAGE:.0f}", style="bold")
     )
 
-    # 포지션 표시
+    # Position display
     if position and position.get("size", 0) != 0:
         pos_side = position.get("side", "").upper()
         pos_size = float(position.get("size", 0))
@@ -691,13 +691,13 @@ def build_dashboard(
 
     # -- MARKET DATA Section --
     table.add_row(Text("▌ MARKET DATA", style="bold cyan"), "")
-    # Mid price (수량 가중 평균)
+    # Mid price (size-weighted average)
     total_size = best_bid_size + best_ask_size
     mid_price = (best_bid * best_bid_size + best_ask * best_ask_size) / total_size if total_size > 0 else (best_bid + best_ask) / 2
     mid_diff_bps = (mid_price - mark_price) / mark_price * 10000 if mark_price > 0 else 0
     mid_diff_style = "green" if abs(mid_diff_bps) < 3 else ("yellow" if abs(mid_diff_bps) < 6 else "red")
 
-    # 스프레드 색상
+    # Spread color
     if spread_bps < 5:
         spread_style = "green"
     elif spread_bps < 10:
@@ -706,7 +706,7 @@ def build_dashboard(
         spread_style = "red"
     drift_style = "yellow" if drift_bps > DRIFT_THRESHOLD else "green"
 
-    # 정렬된 출력 (고정 너비 12자)
+    # Aligned output (fixed width 12 chars)
     table.add_row(Text(f"  Mark:   {format_price(mark_price):>12}  │  Mid:    {format_price(mid_price):>12}"), "")
     table.add_row(Text(f"  Bid:    {format_price(best_bid):>12}  │  Ask:    {format_price(best_ask):>12}"), "")
     spread_line = Text(f"  Spread: ")
@@ -721,7 +721,7 @@ def build_dashboard(
     # -- SIMULATED ORDERS Section --
     table.add_row(Text("▌ SIMULATED ORDERS", style="bold cyan"), "")
 
-    # SELL Order (위에 표시)
+    # SELL Order (displayed above)
     sell_maker_text = Text("[MAKER]", style="green") if sell_is_maker else Text("[TAKER]", style="red")
     if sell_order:
         sell_drift = calc_drift_bps(mark_price, sell_order.reference_price)
@@ -737,7 +737,7 @@ def build_dashboard(
     table.add_row(sell_line, "")
     table.add_row(sell_drift_text, "")
 
-    # BUY Order (아래에 표시)
+    # BUY Order (displayed below)
     buy_maker_text = Text("[MAKER]", style="green") if buy_is_maker else Text("[TAKER]", style="red")
     if buy_order:
         buy_drift = calc_drift_bps(mark_price, buy_order.reference_price)
@@ -757,7 +757,7 @@ def build_dashboard(
     # -- STATUS Section --
     table.add_row(Text("▌ STATUS", style="bold cyan"), "")
 
-    # 상태 색상
+    # Status color
     if status == "MONITORING":
         status_text = Text("● MONITORING - Orders active", style="green bold")
     elif status == "PLACING":
@@ -787,19 +787,19 @@ def build_dashboard(
     # -- STATS Section --
     pnl_style = "green" if pos_stats['total_pnl'] >= 0 else "red"
 
-    # 첫 줄: 주문 통계
+    # First line: Order statistics
     stats_line1 = Text(
         f"Placed: {order_mgr.total_placed}  Cancelled: {order_mgr.total_cancelled}  Rebalanced: {order_mgr.total_rebalanced}",
         style="dim"
     )
     table.add_row(stats_line1, "")
 
-    # 둘째 줄: 청산 통계
+    # Second line: Close statistics
     stats_line2 = Text(f"Closes: {pos_stats['total_closes']} (", style="dim")
     stats_line2.append(f"{pos_stats['total_volume']:.4f} BTC", style="dim")
     stats_line2.append(", ", style="dim")
     stats_line2.append(f"${pos_stats['total_pnl']:+.2f}", style=pnl_style)
-    # 청산 시간 표시
+    # Close time display
     if pos_stats.get('total_close_time', 0) > 0:
         stats_line2.append(f", total: {pos_stats['total_close_time']:.1f}s", style="dim")
     if pos_stats.get('last_close_time', 0) > 0:
@@ -807,7 +807,7 @@ def build_dashboard(
     stats_line2.append(")", style="dim")
     table.add_row(stats_line2, "")
 
-    # Panel로 감싸기
+    # Wrap in Panel
     if is_live:
         title = "[bold red]StandX Market Making [LIVE][/bold red]"
         border = "red"
@@ -823,7 +823,7 @@ def build_dashboard(
     )
 
 
-# ==================== 메인 로직 ====================
+# ==================== Main Logic ====================
 
 async def main():
     is_live = MODE == "LIVE"
@@ -836,7 +836,7 @@ async def main():
     console.print(f"  Coin: {COIN}, Spread: {SPREAD_BPS}bps, Drift: {DRIFT_THRESHOLD}bps{mid_drift_str}, MarkMidLimit: {MARK_MID_DIFF_LIMIT}bps")
     console.print(f"{'='*60}\n")
 
-    # LIVE 모드 확인
+    # LIVE mode confirmation
     if is_live:
         console.print("[bold red]WARNING: LIVE MODE - Real orders will be placed![/bold red]")
         console.print(f"  Max Size: {MAX_SIZE_BTC} {COIN}")
@@ -849,15 +849,15 @@ async def main():
                 console.print("[yellow]Aborted.[/yellow]")
                 return
 
-    
 
-    # Exchange 초기화
+
+    # Exchange initialization
     console.print("Initializing exchange...")
     exchange = await create_exchange(EXCHANGE, STANDX_KEY)
     symbol = symbol_create(EXCHANGE, COIN)
     console.print(f"Symbol: {symbol}")
 
-    # 주문 관리자 생성 (모드에 따라)
+    # Create order manager (based on mode)
     if is_live:
         order_mgr = LiveOrderManager(exchange, symbol)
         console.print("[red]Using LIVE order manager[/red]")
@@ -868,49 +868,49 @@ async def main():
     last_action = ""
 
     try:
-        # WS 구독 시작
+        # Start WS subscriptions
         console.print("Subscribing to price and orderbook...")
         if exchange.ws_client:
             await exchange.ws_client.subscribe_price(symbol)
             await exchange.ws_client.subscribe_orderbook(symbol)
 
-        # 초기 데이터 대기
+        # Wait for initial data
         console.print("Waiting for initial data...")
         await asyncio.sleep(2)
 
-        # LIVE 모드: 기존 주문 조회
+        # LIVE mode: Fetch existing orders
         if is_live:
             console.print("Fetching existing orders...")
             await order_mgr.fetch_orders()
 
-        # 주문 존재 시점 추적
-        orders_exist_since: Optional[float] = None  # 주문이 존재하기 시작한 시점
+        # Track order existence time
+        orders_exist_since: Optional[float] = None  # When orders started existing
         countdown = float(MIN_WAIT_SEC)
 
-        # 연속 에러 추적
+        # Consecutive error tracking
         consecutive_errors = 0
 
-        # 스냅샷 추적
+        # Snapshot tracking
         last_snapshot_time = 0.0
 
-        # collateral 관련 (REST API 사용 가능하므로 필요할 때만 갱신)
+        # Collateral related (REST API available, refresh only when needed)
         available_collateral = 0.0
         total_collateral = 0.0
-        need_collateral_update = True  # 시작 시 + 청산 후에만 True
+        need_collateral_update = True  # True only on start + after close
 
-        # 자동 재시작 추적
+        # Auto restart tracking
         start_time = time.time()
 
-        # mid unstable cooldown 추적
+        # Mid unstable cooldown tracking
         last_mid_unstable_time = 0.0
 
-        # 메인 루프 (Live context로 flicker-free 업데이트)
+        # Main loop (flicker-free update with Live context)
         with Live(console=console, refresh_per_second=10, transient=True) as live:
             while True:
                 try:
                     current_time = time.time()
 
-                    # 자동 재시작 체크
+                    # Auto restart check
                     if RESTART_INTERVAL > 0 and (current_time - start_time) >= RESTART_INTERVAL:
                         console.print(f"\n[yellow]Restarting after {RESTART_INTERVAL}s...[/yellow]")
                         if is_live:
@@ -920,33 +920,33 @@ async def main():
                         file_logger.info(f"AUTO RESTART | Interval: {RESTART_INTERVAL}s")
                         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-                    # collateral 갱신 (시작 시 또는 청산 후)
+                    # Collateral refresh (on start or after close)
                     if need_collateral_update:
                         need_collateral_update = False
                         collateral = await exchange.get_collateral()
                         available_collateral = float(collateral.get("available_collateral", 0))
                         total_collateral = float(collateral.get("total_collateral", 0))
 
-                    # ========== 0. LIVE 모드: 서버에서 주문 조회 ==========
+                    # ========== 0. LIVE mode: Fetch orders from server ==========
                     if is_live:
                         await order_mgr.fetch_orders()
 
-                    # ========== 1. 실시간 데이터 fetch ==========
-                    # mark_price 조회
+                    # ========== 1. Fetch real-time data ==========
+                    # Get mark_price
                     mark_price_str = await exchange.get_mark_price(symbol)
                     mark_price = float(mark_price_str)
 
-                    # 데이터 검증: mark_price
+                    # Data validation: mark_price
                     if mark_price <= 0:
                         await asyncio.sleep(REFRESH_INTERVAL)
                         continue
 
-                    # orderbook 조회
+                    # Get orderbook
                     orderbook = await exchange.get_orderbook(symbol)
                     bids = orderbook.get("bids", [])
                     asks = orderbook.get("asks", [])
 
-                    # 데이터 검증: orderbook
+                    # Data validation: orderbook
                     if not bids or not asks:
                         await asyncio.sleep(REFRESH_INTERVAL)
                         continue
@@ -956,35 +956,35 @@ async def main():
                     best_bid_size = bids[0][1] if len(bids[0]) > 1 else 0
                     best_ask_size = asks[0][1] if len(asks[0]) > 1 else 0
 
-                    # mid price drift 계산 (수량 가중 평균)
+                    # Calculate mid price drift (size-weighted average)
                     total_size = best_bid_size + best_ask_size
                     mid_price = (best_bid * best_bid_size + best_ask * best_ask_size) / total_size if total_size > 0 else (best_bid + best_ask) / 2
                     mid_diff_bps = abs((mid_price - mark_price) / mark_price * 10000) if mark_price > 0 else 0
 
-                    
-                    # total 기준으로 계산 (주문이 들어가도 일관된 크기 표시)
+
+                    # Calculate based on total (consistent size display even with orders)
                     order_size = calc_order_size(total_collateral, mark_price)
 
-                    # position 조회
+                    # Get position
                     position = await exchange.get_position(symbol)
 
-                    # ========== 포지션 자동 청산 ==========
+                    # ========== Auto Position Close ==========
                     if AUTO_CLOSE_POSITION and position and float(position.get("size", 0)) != 0:
-                        # 1. 모든 주문 취소
+                        # 1. Cancel all orders
                         await order_mgr.cancel_all("Position detected - auto close")
                         orders_exist_since = None
 
-                        # 2. 포지션 정보 수집
+                        # 2. Collect position info
                         pos_side = position.get("side", "").upper()
                         pos_size = abs(float(position.get("size", 0)))
                         pos_entry = float(position.get("entry_price", 0))
                         pos_pnl = float(position.get("unrealized_pnl", 0))
 
-                        # 로그: 포지션 감지
+                        # Log: Position detected
                         file_logger.info(f"POSITION DETECTED | {pos_side} {pos_size:.6f} BTC @ {pos_entry:.2f} | uPnL: ${pos_pnl:+.2f}")
                         console.print(f"[yellow]Auto-closing {pos_side} {pos_size:.4f} via {CLOSE_METHOD} (uPnL: ${pos_pnl:+.2f})...[/yellow]")
 
-                        # 3. 전략적 포지션 청산
+                        # 3. Strategic position close
                         try:
                             _success, elapsed_time, iterations, close_log = await close_position_strategic(
                                 exchange=exchange,
@@ -997,14 +997,14 @@ async def main():
                                 max_iterations=CLOSE_MAX_ITERATIONS,
                             )
 
-                            # 통계 업데이트
+                            # Update statistics
                             position_stats["total_closes"] += 1
                             position_stats["total_volume"] += pos_size
                             position_stats["total_pnl"] += pos_pnl
                             position_stats["last_close_time"] = elapsed_time
                             position_stats["total_close_time"] += elapsed_time
 
-                            # 로그: 포지션 청산 완료
+                            # Log: Position closed
                             file_logger.info(
                                 f"POSITION CLOSED  | {pos_side} {pos_size:.6f} BTC | PnL: ${pos_pnl:+.2f} | "
                                 f"Method: {CLOSE_METHOD} | Time: {elapsed_time:.2f}s ({iterations} iter) | "
@@ -1018,29 +1018,29 @@ async def main():
                             file_logger.info(f"POSITION CLOSE FAILED | {pos_side} {pos_size:.6f} BTC | uPnL: ${pos_pnl:+.2f} | Error: {e}")
                             console.print(f"[red]Failed to close position: {e}[/red]")
 
-                        # 다음 iteration에서 collateral 갱신
+                        # Refresh collateral in next iteration
                         need_collateral_update = True
 
                         await asyncio.sleep(REFRESH_INTERVAL)
                         continue
 
-                    # 주문 가격 계산
+                    # Calculate order prices
                     buy_price, sell_price = calc_order_prices(mark_price, SPREAD_BPS)
 
-                    # maker/taker 판정
+                    # Maker/taker determination
                     buy_is_maker, sell_is_maker = check_maker_taker(
                         buy_price, sell_price, best_bid, best_ask
                     )
 
-                    # 오더북 스프레드 계산
+                    # Calculate orderbook spread
                     ob_spread_bps = calc_spread_bps(best_bid, best_ask)
 
-                    # 현재 주문 확인
+                    # Check current orders
                     buy_order = order_mgr.get_buy_order()
                     sell_order = order_mgr.get_sell_order()
                     has_orders = buy_order is not None or sell_order is not None
 
-                    # 드리프트 계산 (주문 기준)
+                    # Calculate drift (based on order)
                     if buy_order:
                         drift_bps = calc_drift_bps(mark_price, buy_order.reference_price)
                     elif sell_order:
@@ -1048,13 +1048,13 @@ async def main():
                     else:
                         drift_bps = 0.0
 
-                    # ========== 2. 상태 결정 ==========
-                    # USE_MID_DRIFT가 True면 mark drift + mid drift 합산, False면 mark drift만
+                    # ========== 2. Status Determination ==========
+                    # If USE_MID_DRIFT is True, combine mark drift + mid drift; otherwise mark drift only
                     effective_drift = (drift_bps + mid_diff_bps) if USE_MID_DRIFT else drift_bps
-                    # mark-mid 차이가 너무 크면 주문 대기 (MARK_MID_DIFF_LIMIT > 0일 때만)
+                    # Wait for orders if mark-mid diff is too large (only when MARK_MID_DIFF_LIMIT > 0)
                     mid_unstable = MARK_MID_DIFF_LIMIT > 0 and mid_diff_bps > MARK_MID_DIFF_LIMIT
 
-                    # mid unstable 시간 기록 및 cooldown 체크
+                    # Record mid unstable time and check cooldown
                     if mid_unstable:
                         last_mid_unstable_time = time.time()
                     mid_cooldown_active = (
@@ -1068,7 +1068,7 @@ async def main():
                     elif not buy_is_maker or not sell_is_maker:
                         status = "WAITING"
                     elif (mid_unstable or mid_cooldown_active) and not has_orders:
-                        status = "MID_WAIT"  # mid drift 안정화 대기 (또는 cooldown 중)
+                        status = "MID_WAIT"  # Waiting for mid drift stability (or cooldown)
                     elif has_orders:
                         if effective_drift > DRIFT_THRESHOLD:
                             status = "REBALANCING"
@@ -1077,21 +1077,21 @@ async def main():
                     else:
                         status = "PLACING"
 
-                    # ========== 3. 주문 존재 시간 추적 ==========
+                    # ========== 3. Track Order Existence Time ==========
                     if has_orders:
                         now = time.time()
                         if orders_exist_since is None:
-                            orders_exist_since = now  # 주문이 처음 감지됨
+                            orders_exist_since = now  # Orders first detected
                         time_with_orders = now - orders_exist_since
                         countdown = max(0.0, MIN_WAIT_SEC - time_with_orders)
                         can_modify_orders = time_with_orders >= MIN_WAIT_SEC
                     else:
-                        orders_exist_since = None  # 주문 없으면 리셋
+                        orders_exist_since = None  # Reset if no orders
                         countdown = 0.0
-                        can_modify_orders = True  # 주문이 없으면 바로 새 주문 가능
+                        can_modify_orders = True  # Can place new orders immediately if none exist
 
-                    # ========== 4. 주문 로직 ==========
-                    # 드리프트 체크 - 리밸런스 (MIN_WAIT_SEC 대기 후)
+                    # ========== 4. Order Logic ==========
+                    # Drift check - rebalance (after MIN_WAIT_SEC delay)
                     if has_orders and effective_drift > DRIFT_THRESHOLD and can_modify_orders:
                         order_mgr.rebalance()
                         await order_mgr.cancel_all("Drift exceeded threshold")
@@ -1099,9 +1099,9 @@ async def main():
                         last_action = f"Cancelled for rebalance (drift: {drift_info}bps)"
                         orders_exist_since = None
                         await asyncio.sleep(CANCEL_AFTER_DELAY)
-                        continue  # 다음 iteration에서 fresh price로 신규 주문
+                        continue  # Place new order with fresh price in next iteration
 
-                    # 주문이 없고 maker 조건 충족 - 신규 주문 (mid 안정 + cooldown 완료 시에만)
+                    # No orders and maker conditions met - place new orders (only when mid stable + cooldown done)
                     elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable and not mid_cooldown_active:
                         buy_order, sell_order = await staggered_gather(
                             order_mgr.place_order("buy", buy_price, order_size, mark_price),
@@ -1110,9 +1110,9 @@ async def main():
                         # {'code': 0, 'message': 'success', 'request_id': '....'}
                         has_orders = buy_order.message == 'success' and sell_order.message == 'success'
                         last_action = f"Placed BUY @ {format_price(buy_price)}, SELL @ {format_price(sell_price)}"
-                        orders_exist_since = time.time()  # 타이머 시작
+                        orders_exist_since = time.time()  # Start timer
 
-                    # ========== 5. 대시보드 표시 ==========
+                    # ========== 5. Display Dashboard ==========
                     dashboard = build_dashboard(
                         symbol=symbol,
                         mark_price=mark_price,
@@ -1137,7 +1137,7 @@ async def main():
                     )
                     live.update(dashboard)
 
-                    # ========== 6. 스냅샷 저장 ==========
+                    # ========== 6. Save Snapshot ==========
                     if SNAPSHOT_INTERVAL > 0 and (current_time - last_snapshot_time) >= SNAPSHOT_INTERVAL:
                         try:
                             buy_order = order_mgr.get_buy_order()
@@ -1155,15 +1155,15 @@ async def main():
                                 f.write(f"Status: {status}\n")
                             last_snapshot_time = current_time
                         except Exception:
-                            pass  # 스냅샷 실패해도 무시
+                            pass  # Ignore snapshot failures
 
-                    # 성공 시 에러 카운터 리셋
+                    # Reset error counter on success
                     consecutive_errors = 0
                     await asyncio.sleep(REFRESH_INTERVAL)
 
                 except Exception as e:
                     consecutive_errors += 1
-                    backoff = min(consecutive_errors * 0.5, 10.0)  # 최대 10초
+                    backoff = min(consecutive_errors * 0.5, 10.0)  # Max 10 seconds
                     console.print(f"[red][Error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}] {e}[/red]")
 
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
@@ -1205,4 +1205,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass  # 이미 main()에서 처리됨
+        pass 

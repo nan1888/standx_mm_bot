@@ -1113,4 +1113,17 @@ python main.py
 - LIVE模式使用真钱
 - 保证金不足时不会创建订单
 
+### 关于 "REST API skipped" 消息
+
+有时您可能会看到这条消息：
+```
+REST API skipped on. No order at this moment
+```
+或者
+```
+[StandXExchange] create_order WS failed: balance not enough
+```
+
+**这是正常现象，无需担心。** 这是因为订单取消后立即下新单时，StandX服务器尚未更新余额导致的。机器人会在下一个周期自动重试。
+
 ---
