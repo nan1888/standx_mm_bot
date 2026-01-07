@@ -33,7 +33,8 @@ from exchange_factory import create_exchange, symbol_create
 from dotenv import load_dotenv
 from config import (
     MODE, EXCHANGE, COIN, AUTO_CONFIRM,
-    SPREAD_BPS, DRIFT_THRESHOLD, USE_MID_DRIFT, MARK_MID_DIFF_LIMIT, MIN_WAIT_SEC, REFRESH_INTERVAL,
+    SPREAD_BPS, DRIFT_THRESHOLD, USE_MID_DRIFT, MARK_MID_DIFF_LIMIT, MID_UNSTABLE_COOLDOWN,
+    MIN_WAIT_SEC, REFRESH_INTERVAL,
     SIZE_UNIT, LEVERAGE, MAX_SIZE_BTC,
     MAX_HISTORY, MAX_CONSECUTIVE_ERRORS,
     AUTO_CLOSE_POSITION,
@@ -459,6 +460,7 @@ async def close_position_strategic(
 
     # Market close - 즉시 시장가
     if method == "market":
+        file_logger.info(f"  → CLOSE: MARKET order {close_side.upper()} {remaining_size:.6f}")
         await exchange.close_position(symbol, position)
         elapsed = time.time() - start_time
         return (True, elapsed, 1, f"MARKET 청산 ({elapsed:.2f}s)")
@@ -469,6 +471,7 @@ async def close_position_strategic(
 
         # 최대 반복 횟수 초과 시 시장가로 강제 청산
         if iterations > max_iterations:
+            file_logger.info(f"  → CLOSE iter {iterations}: max iterations exceeded, MARKET fallback {remaining_size:.6f}")
             await exchange.create_order(
                 symbol=symbol,
                 side=close_side,
@@ -481,6 +484,7 @@ async def close_position_strategic(
 
         # 잔여 수량이 너무 작으면 시장가로 청산
         if remaining_size < min_size_market:
+            file_logger.info(f"  → CLOSE iter {iterations}: dust {remaining_size:.6f} < {min_size_market}, MARKET fallback")
             await exchange.create_order(
                 symbol=symbol,
                 side=close_side,
@@ -533,6 +537,7 @@ async def close_position_strategic(
 
             # 오더북 데이터 없으면 시장가 fallback
             if limit_price is None:
+                file_logger.info(f"  → CLOSE iter {iterations}: no orderbook, MARKET fallback {remaining_size:.6f}")
                 await exchange.create_order(
                     symbol=symbol,
                     side=close_side,
@@ -545,6 +550,7 @@ async def close_position_strategic(
 
         # 지정가 주문 생성
         cl_ord_id = f"CLOSE-{uuid.uuid4().hex[:8].upper()}"
+        file_logger.info(f"  → CLOSE iter {iterations}: {close_side.upper()} {remaining_size:.6f} @ {limit_price:,.2f} ({method})")
         console.print(f"[dim]Close order: {close_side.upper()} {remaining_size:.6f} @ {limit_price:,.2f}[/dim]")
         try:
             await exchange.create_order(
@@ -558,6 +564,7 @@ async def close_position_strategic(
             )
         except Exception as e:
             # 주문 실패 시 다음 iteration에서 재시도
+            file_logger.info(f"  → CLOSE iter {iterations}: order failed - {e}, retrying...")
             console.print(f"[yellow]Close order failed: {e}, retrying...[/yellow]")
             await asyncio.sleep(1.0)
             continue
@@ -575,12 +582,14 @@ async def close_position_strategic(
             if new_position is None or float(new_position.get("size", 0)) == 0:
                 # 완전 청산 완료
                 elapsed = time.time() - start_time
+                file_logger.info(f"  → CLOSE iter {iterations}: filled completely")
                 return (True, elapsed, iterations, f"{method.upper()} 청산 완료 ({elapsed:.1f}s, {iterations} iter)")
 
             # 잔여 수량 확인
             new_remaining = abs(float(new_position.get("size", 0)))
             if new_remaining < remaining_size:
                 # 부분 체결 발생
+                file_logger.info(f"  → CLOSE iter {iterations}: partial fill {remaining_size:.6f} -> {new_remaining:.6f}")
                 console.print(f"[dim]Partial fill: {remaining_size:.6f} -> {new_remaining:.6f}[/dim]")
                 remaining_size = new_remaining
                 filled = True
@@ -588,6 +597,8 @@ async def close_position_strategic(
         # 대기 시간 만료 후에도 미체결이면 취소 후 재시도
         if not filled:
             remaining_size = abs(float((await exchange.get_position(symbol) or {}).get("size", 0)))
+            if remaining_size > 0:
+                file_logger.info(f"  → CLOSE iter {iterations}: timeout, cancelling and retry (remaining: {remaining_size:.6f})")
 
         # 미체결 주문 취소
         try:
@@ -886,6 +897,9 @@ async def main():
         # 자동 재시작 추적
         start_time = time.time()
 
+        # mid unstable cooldown 추적
+        last_mid_unstable_time = 0.0
+
         # 메인 루프 (Live context로 flicker-free 업데이트)
         with Live(console=console, refresh_per_second=10, transient=True) as live:
             while True:
@@ -1036,12 +1050,21 @@ async def main():
                     # mark-mid 차이가 너무 크면 주문 대기 (MARK_MID_DIFF_LIMIT > 0일 때만)
                     mid_unstable = MARK_MID_DIFF_LIMIT > 0 and mid_diff_bps > MARK_MID_DIFF_LIMIT
 
+                    # mid unstable 시간 기록 및 cooldown 체크
+                    if mid_unstable:
+                        last_mid_unstable_time = time.time()
+                    mid_cooldown_active = (
+                        MID_UNSTABLE_COOLDOWN > 0 and
+                        last_mid_unstable_time > 0 and
+                        (time.time() - last_mid_unstable_time) < MID_UNSTABLE_COOLDOWN
+                    )
+
                     if order_size <= 0:
                         status = "NO_SIZE"
                     elif not buy_is_maker or not sell_is_maker:
                         status = "WAITING"
-                    elif mid_unstable and not has_orders:
-                        status = "MID_WAIT"  # mid drift 안정화 대기
+                    elif (mid_unstable or mid_cooldown_active) and not has_orders:
+                        status = "MID_WAIT"  # mid drift 안정화 대기 (또는 cooldown 중)
                     elif has_orders:
                         if effective_drift > DRIFT_THRESHOLD:
                             status = "REBALANCING"
@@ -1052,9 +1075,10 @@ async def main():
 
                     # ========== 3. 주문 존재 시간 추적 ==========
                     if has_orders:
+                        now = time.time()
                         if orders_exist_since is None:
-                            orders_exist_since = current_time  # 주문이 처음 감지됨
-                        time_with_orders = current_time - orders_exist_since
+                            orders_exist_since = now  # 주문이 처음 감지됨
+                        time_with_orders = now - orders_exist_since
                         countdown = max(0.0, MIN_WAIT_SEC - time_with_orders)
                         can_modify_orders = time_with_orders >= MIN_WAIT_SEC
                     else:
@@ -1073,14 +1097,14 @@ async def main():
                         await asyncio.sleep(CANCEL_AFTER_DELAY)
                         continue  # 다음 iteration에서 fresh price로 신규 주문
 
-                    # 주문이 없고 maker 조건 충족 - 신규 주문 (mid drift 안정 시에만)
-                    elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable:
+                    # 주문이 없고 maker 조건 충족 - 신규 주문 (mid 안정 + cooldown 완료 시에만)
+                    elif not has_orders and buy_is_maker and sell_is_maker and not mid_unstable and not mid_cooldown_active:
                         buy_order, sell_order = await staggered_gather(
                             order_mgr.place_order("buy", buy_price, order_size, mark_price),
                             order_mgr.place_order("sell", sell_price, order_size, mark_price),
                         )
                         last_action = f"Placed BUY @ {format_price(buy_price)}, SELL @ {format_price(sell_price)}"
-                        orders_exist_since = current_time  # 타이머 시작
+                        orders_exist_since = time.time()  # 타이머 시작
 
                     # ========== 5. 대시보드 표시 ==========
                     dashboard = build_dashboard(

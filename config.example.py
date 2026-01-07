@@ -13,6 +13,7 @@ SPREAD_BPS = 6.5        # 주문 스프레드 (bps)
 DRIFT_THRESHOLD = 3.5   # 재주문 트리거 (bps)
 USE_MID_DRIFT = True    # True: mark drift + mid drift 합산, False: mark drift만 고려
 MARK_MID_DIFF_LIMIT = 1.0  # mark-mid 차이가 이 값(bps) 초과시 주문 대기 (0이면 비활성화)
+MID_UNSTABLE_COOLDOWN = 0  # mid unstable 이후 추가 대기 시간 (초), 0이면 즉시 주문
 MIN_WAIT_SEC = 0.1      # 주문 변경 최소 대기 시간 (초)
 REFRESH_INTERVAL = 0.05 # 화면 갱신 간격 (초)
 CANCEL_AFTER_DELAY = 0.1 # 주문 취소후 딜레이 대기
