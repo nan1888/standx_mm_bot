@@ -298,6 +298,19 @@ Recommended for servers: **3600-86400**, for testing: **0**
 
 ---
 
+### 13-1. RESTART_DELAY - Delay Before Restart
+
+```python
+RESTART_DELAY = 5    # Wait 5 seconds before restart
+RESTART_DELAY = 10   # Wait 10 seconds before restart (default)
+```
+
+In LIVE mode, orders are cancelled before restart. This delay ensures the exchange has time to process the cancellations.
+
+Recommended: **5-10**
+
+---
+
 ## Recommended Settings for Beginners
 
 ```python
@@ -670,6 +683,19 @@ RESTART_INTERVAL = 86400   # 24시간마다 자동 재시작
 
 ---
 
+### 13-1. RESTART_DELAY - 재시작 전 대기 시간
+
+```python
+RESTART_DELAY = 5    # 재시작 전 5초 대기
+RESTART_DELAY = 10   # 재시작 전 10초 대기 (기본값)
+```
+
+LIVE 모드에서는 재시작 전에 모든 주문을 취소해요. 이 대기 시간은 거래소에서 취소 처리가 완료될 때까지 기다리는 시간입니다.
+
+추천: **5~10**
+
+---
+
 ## 처음 시작하는 사람을 위한 추천 설정
 
 ```python
@@ -1039,6 +1065,19 @@ RESTART_INTERVAL = 86400   # 每24小时重启
 长时间运行可能导致内存泄漏和连接问题。此设置可定期重启。
 
 服务器推荐：**3600-86400**，测试时：**0**
+
+---
+
+### 13-1. RESTART_DELAY - 重启前延迟
+
+```python
+RESTART_DELAY = 5    # 重启前等待5秒
+RESTART_DELAY = 10   # 重启前等待10秒（默认）
+```
+
+在LIVE模式下，重启前会取消所有订单。此延迟确保交易所有足够时间处理取消操作。
+
+推荐：**5-10**
 
 ---
 

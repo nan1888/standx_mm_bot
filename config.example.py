@@ -52,3 +52,4 @@ SNAPSHOT_FILE = "status.txt"   # Snapshot filename
 
 # Auto Restart
 RESTART_INTERVAL = 3600        # Auto restart interval (sec), 0 to disable
+RESTART_DELAY = 10             # Delay before restart after cancelling orders (sec)

@@ -41,20 +41,49 @@ from config import (
     CLOSE_METHOD, CLOSE_AGGRESSIVE_BPS, CLOSE_WAIT_SEC,
     CLOSE_MIN_SIZE_MARKET, CLOSE_MAX_ITERATIONS,
     SNAPSHOT_INTERVAL, SNAPSHOT_FILE, CANCEL_AFTER_DELAY,
-    RESTART_INTERVAL,
+    RESTART_INTERVAL, RESTART_DELAY,
 )
 
 load_dotenv()
 
 # ==================== Logging Setup ====================
 LOG_FILE = "position_log.txt"
+CONSOLE_LOG_FILE = "console_log.txt"
 
-# File logger setup
+# File logger setup (for position tracking)
 file_logger = logging.getLogger("position")
 file_logger.setLevel(logging.INFO)
 file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
 file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 file_logger.addHandler(file_handler)
+
+
+class TeeWriter:
+    """Write to both terminal and log file simultaneously"""
+    def __init__(self, original_stream, log_file_path: str):
+        self.original = original_stream
+        self.log_file = open(log_file_path, "w", encoding="utf-8")  # 'w' clears on startup
+
+    def write(self, message):
+        self.original.write(message)
+        if message.strip():  # Skip empty lines
+            # Add timestamp for non-empty messages
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.log_file.write(f"[{timestamp}] {message}")
+            if not message.endswith('\n'):
+                self.log_file.write('\n')
+            self.log_file.flush()
+
+    def flush(self):
+        self.original.flush()
+        self.log_file.flush()
+
+    def close(self):
+        self.log_file.close()
+
+
+# Redirect stdout to capture print statements from mpdex and other libraries
+sys.stdout = TeeWriter(sys.__stdout__, CONSOLE_LOG_FILE)
 
 STANDX_KEY = SimpleNamespace(
     wallet_address=os.getenv("WALLET_ADDRESS"),
@@ -63,7 +92,7 @@ STANDX_KEY = SimpleNamespace(
     open_browser=True,
 )
 
-console = Console()
+console = Console(file=sys.stdout, force_terminal=True)  # Use TeeWriter for logging
 
 # ==================== Position Statistics ====================
 position_stats = {
@@ -915,8 +944,8 @@ async def main():
                         console.print(f"\n[yellow]Restarting after {RESTART_INTERVAL}s...[/yellow]")
                         if is_live:
                             await order_mgr.exchange.cancel_orders(symbol=order_mgr.symbol)
-                            console.print("[green]All orders cancelled before restart...5s remains.[/green]")
-                            await asyncio.sleep(5)
+                            console.print(f"[green]All orders cancelled before restart...{RESTART_DELAY}s remains.[/green]")
+                            await asyncio.sleep(RESTART_DELAY)
                         file_logger.info(f"AUTO RESTART | Interval: {RESTART_INTERVAL}s")
                         os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -1175,7 +1204,7 @@ async def main():
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
     finally:
-        # 종료 전 모든 주문 취소 (캐시 무관하게 심볼 전체)
+        # Cancel all orders before exit (all symbol orders regardless of cache)
         if is_live:
             console.print("Cancelling all orders...")
             try:
@@ -1200,9 +1229,17 @@ async def main():
         await exchange.close()
         console.print("Done.")
 
+        # Close console log file
+        if hasattr(sys.stdout, 'close'):
+            sys.stdout.close()
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass 
+        pass
+    finally:
+        # Ensure log file is closed on exit
+        if hasattr(sys.stdout, 'close'):
+            sys.stdout.close()
